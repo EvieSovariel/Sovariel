@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Sovariel v6: Tree + Prime Sums w/ Verified Closed-Form & iOS Fallback
-Formula: S(d,n)=2^{d-1}(2n+d); T(d,N)=2^{d-1} N (N-1+d). Usage: [--size 1000000] [--depth 20] [--benchmark]
+Sovariel v6: Tree + Prime Sums w/ Verified Closed-Form Fix & iOS Fallback
+Formula: S(d,n)=2^{d-1}(2n+d); T(d,N)=2^{d-1} N (N-1+d). Usage: [--size 1000000] [--depth 14] [--benchmark]
 """
 
 import argparse
@@ -70,17 +70,19 @@ def serial_tree_sum(size, depth):
     return tree_factor * size * (size - 1 + depth)
 
 def verify_formula(d, N):
-    """Quick recursive vs closed check (for small; e.g., d=2,N=3)."""
+    """Quick recursive vs closed check (for small; e.g., d=3,N=10)."""
     rec_total = sum(recursive_tree_sum(d, i) for i in range(N))
     closed_total = serial_tree_sum(N, d)
     return rec_total == closed_total, rec_total, closed_total
 
 def chunk_tree(start, end, depth):
-    """Chunked tree sum (closed-form)."""
-    n = end - start
-    tree_factor = 1 << (depth - 1)
+    """Chunked tree sum (closed-form): sum_{n=start}^{end-1} 2^d n + 2^{d-1} d * num."""
+    num = end - start
+    if depth < 1: return sum(range(start, end))
+    tree_factor_d = 1 << depth  # 2^d
+    tree_factor_dm1 = 1 << (depth - 1)  # 2^{d-1}
     sum_range = end * (end - 1) // 2 - start * (start - 1) // 2
-    return tree_factor * (sum_range + n * depth)  # Adjusted for formula
+    return tree_factor_d * sum_range + tree_factor_dm1 * depth * num
 
 def serial_prime_sum(size):
     """Serial prime sum <= size."""
@@ -103,7 +105,7 @@ def main(args):
     timings = {}
     
     # Formula verify (small sample)
-    match, rec, cls = verify_formula(min(args.depth, 3), min(args.size, 5))
+    match, rec, cls = verify_formula(min(args.depth, 3), min(args.size, 10))
     logger.info(f"Formula verify (small): {'Match' if match else 'Mismatch'}; rec={rec}, closed={cls}")
     
     # Baseline
@@ -124,6 +126,7 @@ def main(args):
     timings['serial_prime'] = time.perf_counter() - start
     
     # Parallel tree (if viable/benchmark)
+    total_tree_p = None
     if parallel_ok and args.benchmark:
         start = time.perf_counter()
         try:
@@ -135,7 +138,7 @@ def main(args):
             total_tree_p = sum(results)
             timings['parallel_tree'] = time.perf_counter() - start
             if total_tree != total_tree_p:
-                logger.warning("Tree mismatch!")
+                logger.warning(f"Tree mismatch: serial={total_tree}, parallel={total_tree_p}")
             else:
                 logger.info("Parallel tree coherent.")
         except Exception as e:
@@ -144,6 +147,8 @@ def main(args):
     # Outputs
     expected_flat = args.size * (args.size - 1) // 2
     logger.info(f"Tree sum: {total_tree} (closed: 2^{args.depth-1} * N * (N-1 + {args.depth}))")
+    if total_tree_p is not None:
+        logger.info(f"Parallel tree sum: {total_tree_p}")
     logger.info(f"Prime sum <=N: {total_prime}")
     logger.info(f"Coherence: Flat ~{expected_flat}; baseline matched.")
     
@@ -156,7 +161,7 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Sovariel v6 Tree/Prime Demo")
     parser.add_argument('--size', type=int, default=1000000, help="N base")
-    parser.add_argument('--depth', type=int, default=20, help="Tree depth")
+    parser.add_argument('--depth', type=int, default=14, help="Tree depth")
     parser.add_argument('--processes', type=int, default=mp.cpu_count() or 6)
     parser.add_argument('--benchmark', action='store_true')
     args = parser.parse_args()
