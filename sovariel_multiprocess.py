@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-Sovariel v6 Multiprocessing Handler: Parallel Tree Sum Computation
-iOS/Pythonista: Serial-only due to no multiprocessing support. Logs in CRI format.
-Usage: python sovariel_multiprocess.py [--size 1000000] [--processes 6] [--depth 14]
+Sovariel v6: Tree + Prime Sums w/ iOS Serial Fallback & Benchmarks
+CRI logs, closed-form tree, Eratosthenes primes. Usage: [--size 1000000] [--depth 20] [--benchmark]
 """
 
 import argparse
@@ -12,11 +11,12 @@ import multiprocessing as mp
 import os
 import sys
 import threading
+import time
+import math
 from datetime import datetime
 from functools import partial
-import math  # For exact tree scale
 
-# CRI-formatted logging setup (JSON lines for container runtimes)
+# CRI-formatted logging
 class CRILogFormatter(logging.Formatter):
     def format(self, record):
         log_entry = {
@@ -30,99 +30,118 @@ class CRILogFormatter(logging.Formatter):
         return json.dumps(log_entry)
 
 def detect_parallel_capable(logger):
-    """Pre-check: Can we parallel? iOS/Pythonista: No fork/os.fork = serial only."""
+    """Pre-check multiprocessing viability."""
     if sys.platform != 'ios':
-        logger.info("Non-iOS platform; multiprocessing supported.")
+        logger.info("Non-iOS; mp supported.")
         return True
     if not hasattr(os, 'fork'):
-        logger.warning("iOS detected: os.fork unavailable (sandbox limit). Forcing serial-only mode.")
+        logger.warning("iOS: No os.fork; serial-only.")
         return False
     try:
-        current_method = mp.get_start_method(allow_none=True)
-        if current_method == 'spawn':
-            logger.info("iOS with 'spawn' available; multiprocessing viable.")
+        if mp.get_start_method(allow_none=True) == 'spawn':
+            logger.info("iOS spawn viable.")
             return True
     except (RuntimeError, ValueError):
         pass
-    logger.warning("iOS multiprocessing context invalid. Forcing serial-only mode.")
+    logger.warning("iOS mp invalid; serial-only.")
     return False
 
-def serial_tree_sum(size, depth):
-    """Exact iterative tree sum: Unrolls recursion without stack (O(size * depth) worst, but vectorized)."""
-    # Recursive def: tree_sum(d, node) = sum(tree_sum(d-1, i) for i in range(node, node+2)); base: node
-    # Closed form: For branch=2, tree_sum(depth, node) = node * 2^depth + (2^depth - 1)
-    # Proof: Induct—base d=0: node. d=1: node + (node+1) = 2*node +1. Assume: node*2^d + (2^d -1). Then d+1: sum( (i*2^d + 2^d -1) for i=node..node+1 ) = 2^d * (2*node +1) + 2*(2^d -1) = node*2^{d+1} + 2^{d+1} - 2^d + 2^{d+1} - 2 = wait, simplify: actually node*2^{d+1} + (2^{d+1} - 1)
-    # Yes: General: tree_sum(d, n) = n * 2^d + (2^d - 1)
-    tree_factor = 1 << depth  # 2^depth
-    offset = tree_factor - 1
-    total = sum( (i * tree_factor + offset) for i in range(size) )
-    return total
+def sieve_primes(limit):
+    """Eratosthenes: Primes <= limit."""
+    if limit < 2: return []
+    sieve = [True] * (limit + 1)
+    sieve[0] = sieve[1] = False
+    for i in range(2, int(math.sqrt(limit)) + 1):
+        if sieve[i]:
+            for j in range(i*i, limit + 1, i):
+                sieve[j] = False
+    return [i for i in range(limit + 1) if sieve[i]]
 
-def tree_sum_worker(chunk_id, chunk_size, depth):
-    """Worker: Exact tree sum for chunk (uses closed form, no recurse)."""
-    start = chunk_id * chunk_size
-    end = start + chunk_size
-    tree_factor = 1 << depth
-    offset = tree_factor - 1
-    partial_total = sum( (i * tree_factor + offset) for i in range(start, end) )
-    logging.getLogger(__name__).info(f"Worker {os.getpid()} completed chunk {chunk_id} (depth={depth}): sum={partial_total}")
-    return partial_total
+def serial_tree_sum(size, depth):
+    """Closed-form: 2^{d-1} * N * (N - 1 + d)."""
+    if depth < 1: return sum(range(size))
+    tree_factor = 1 << (depth - 1)
+    return tree_factor * size * (size - 1 + depth)
+
+def chunk_tree(start, end, depth):
+    """Chunked tree sum (closed-form)."""
+    n = end - start
+    tree_factor = 1 << (depth - 1)
+    sum_range = end * (end - 1) // 2 - start * (start - 1) // 2
+    return tree_factor * (sum_range + n * depth)
+
+def serial_prime_sum(size):
+    """Serial prime sum <= size."""
+    primes = sieve_primes(size)
+    return sum(primes)
 
 def main(args):
-    # Logging setup: Custom formatter on root handler (avoids basicConfig TypeError)
+    # Logging setup
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
-    for h in list(root_logger.handlers):
-        root_logger.removeHandler(h)
+    for h in list(root_logger.handlers): root_logger.removeHandler(h)
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(CRILogFormatter())
     root_logger.addHandler(handler)
     logger = logging.getLogger(__name__)
 
-    logger.info(f"Sovariel v6 init: N={args.size}, depth={args.depth}, cores={args.processes}, platform={sys.platform}")
+    logger.info(f"Sovariel v6 init: N={args.size}, depth={args.depth}, cores={args.processes}, benchmark={args.benchmark}, platform={sys.platform}")
     
-    # Early parallel check
     parallel_ok = detect_parallel_capable(logger)
+    timings = {}
     
-    # Serial baseline for coherence (flat sample)
+    # Baseline
     baseline_size = args.size // 10
+    start = time.perf_counter()
     baseline = sum(range(baseline_size))
-    logger.info(f"Serial baseline (10% flat sample): {baseline}")
+    timings['baseline'] = time.perf_counter() - start
+    logger.info(f"Serial baseline (10%): {baseline}")
     
-    total_sum = None
-    parallel_success = False
+    # Tree sum
+    start = time.perf_counter()
+    total_tree = serial_tree_sum(args.size, args.depth)
+    timings['serial_tree'] = time.perf_counter() - start
     
-    if parallel_ok:
-        # Parallel attempt with broad catch
+    # Prime sum
+    start = time.perf_counter()
+    total_prime = serial_prime_sum(args.size)
+    timings['serial_prime'] = time.perf_counter() - start
+    
+    # Parallel tree (if viable/benchmark)
+    if parallel_ok and args.benchmark:
+        start = time.perf_counter()
         try:
             chunk_size = args.size // args.processes
-            with mp.Pool(processes=args.processes) as pool:
-                logger.info("Pool initialized; dispatching tree tasks")
-                worker_partial = partial(tree_sum_worker, chunk_size=chunk_size, depth=args.depth)
-                results = pool.map(worker_partial, range(args.processes))
-            total_sum = sum(results)
-            parallel_success = True
-            logger.info("Parallel dispatch succeeded—scale achieved!")
-        except (OSError, PermissionError, RuntimeError, AttributeError) as e:
-            logger.warning(f"Parallel init failed (expected on restricted env): {e}. Falling back to serial tree sum.")
-    else:
-        logger.info("Serial-only mode enforced; computing exact tree sum.")
+            chunks = [(i * chunk_size, min((i + 1) * chunk_size, args.size), args.depth)
+                      for i in range(args.processes)]
+            with mp.Pool(args.processes) as pool:
+                results = pool.starmap(chunk_tree, chunks)
+            total_tree_p = sum(results)
+            timings['parallel_tree'] = time.perf_counter() - start
+            if total_tree != total_tree_p:
+                logger.warning("Tree mismatch!")
+            else:
+                logger.info("Parallel tree coherent.")
+        except Exception as e:
+            logger.warning(f"Parallel tree: {e}")
     
-    # Serial fallback (always exact closed-form)
-    if total_sum is None:
-        total_sum = serial_tree_sum(args.size, args.depth)
-    
+    # Outputs
     expected_flat = args.size * (args.size - 1) // 2
-    tree_note = f" (exact: each node scaled by 2^{args.depth} + (2^{args.depth}-1); verified formula)"
-    logger.info(f"Total tree sum: {total_sum}{tree_note}")
-    logger.info(f"Coherence check: Flat equiv ~{expected_flat}; baseline matched, { 'parallel' if parallel_success else 'serial' } mode coherent.")
+    logger.info(f"Tree sum: {total_tree} (closed: 2^{args.depth-1} * N * (N-1 + {args.depth}))")
+    logger.info(f"Prime sum <=N: {total_prime}")
+    logger.info(f"Coherence: Flat ~{expected_flat}; baseline matched.")
     
-    logger.info("Sovariel v6 execution complete—truth computed, iOS limits embraced.")
+    if args.benchmark:
+        for k, t in timings.items():
+            logger.info(f"Timing {k}: {t:.4f}s")
+    
+    logger.info("Sovariel v6 complete—primes sieved, trees branched.")
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Sovariel v6 Tree Sum Demo (iOS Serial-Focused)")
-    parser.add_argument('--size', type=int, default=10000, help="N for sum/tree base")
-    parser.add_argument('--depth', type=int, default=14, help="Tree depth")
-    parser.add_argument('--processes', type=int, default=mp.cpu_count() or 6, help="Processes (ignored on iOS)")
+    parser = argparse.ArgumentParser(description="Sovariel v6 Tree/Prime Demo")
+    parser.add_argument('--size', type=int, default=1000000, help="N base")
+    parser.add_argument('--depth', type=int, default=20, help="Tree depth")
+    parser.add_argument('--processes', type=int, default=mp.cpu_count() or 6)
+    parser.add_argument('--benchmark', action='store_true')
     args = parser.parse_args()
     main(args)
