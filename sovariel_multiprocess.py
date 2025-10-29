@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-
 """
 Sovariel v6 Multiprocessing Handler: Parallel Sum Computation
 Handles iOS fork errors via spawn fallback. Logs in CRI format for runtime introspection.
@@ -32,10 +31,22 @@ class CRILogFormatter(logging.Formatter):
 def detect_start_method(logger):
     """Detect optimal start method; fallback for iOS."""
     if sys.platform == 'ios':
-        logger.info("Detected iOS platform; forcing 'spawn' to bypass fork restrictions.")
+        logger.info("Detected iOS platform; targeting 'spawn' to bypass fork restrictions.")
         return 'spawn'
-    logger.info("Non-iOS platform; using 'fork' for efficiency.")
+    logger.info("Non-iOS platform; targeting 'fork' for efficiency.")
     return 'fork'
+
+def set_start_method_safely(start_method, logger):
+    """Safely set start method: Only if unset, verify match if set."""
+    current = mp.get_start_method(allow_none=True)
+    if current is None:
+        mp.set_start_method(start_method)
+        logger.info(f"Multiprocessing start method set to '{start_method}'")
+    elif current != start_method:
+        logger.error(f"Multiprocessing already set to '{current}', but '{start_method}' required. Aborting.")
+        sys.exit(1)
+    else:
+        logger.info(f"Multiprocessing start method already set to '{start_method}' (as expected)")
 
 def worker_task(chunk_id, chunk_size):
     """Worker: Compute partial sum for assigned chunk."""
@@ -60,12 +71,7 @@ def main(args):
     
     # Set start method early (post-logger for clean msgs)
     start_method = detect_start_method(logger)
-    try:
-        mp.set_start_method(start_method)
-        logger.info(f"Multiprocessing start method set to '{start_method}'")
-    except RuntimeError as e:
-        logger.error(f"Failed to set start method '{start_method}': {e}")
-        sys.exit(1)
+    set_start_method_safely(start_method, logger)
     
     # Serial baseline for coherence check (small sample)
     baseline = sum(range(args.size // 10))  # 10% for quick verify
