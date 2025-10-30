@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Sovariel v6.9: Prime-Weighted Path Sums (Node-Level, Prefix O(1))
-- Pickle-safe parallel tree
+- Pickle-safe parallel tree (chunk_tree inside main)
 - --prime_path: total weighted path sum = prefix[N + 2^d - 1]
 """
 
