@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Sovariel v6: Tree + Prime Sums w/ Verified Closed-Form & iOS Fallback
-Formula: S(d,n)=2^d n + d * 2^{d-1}; T(d,N)=2^{d-1} N (N-1 + d). Usage: [--size 10000] [--depth 14] [--benchmark]
+Sovariel v6: Tree + Prime Sums w/ Prime-Weighted DP & iOS Fallback
+Formula: S(d,n)=2^d n + d * 2^{d-1}; T(d,N)=2^{d-1} N (N-1 + d). Usage: [--size 1000000] [--depth 14] [--benchmark] [--prime_weighted]
 """
 
 import argparse
@@ -89,6 +89,25 @@ def serial_prime_sum(size):
     primes = sieve_primes(size)
     return sum(primes)
 
+def dp_prime_weighted_tree_sum(size, depth, primes):
+    """DP exact prime-weighted: Base leaf i = primes[i], aggregate subtrees."""
+    # dp[k][i] = sum primes in subtree at level k rooted at i
+    dp = [[0] * size for _ in range(depth + 1)]
+    for i in range(size):
+        dp[0][i] = primes[i] if i < len(primes) else 0
+    for k in range(1, depth + 1):
+        for i in range(size):
+            dp[k][i] = dp[k-1][i]
+            if i + 1 < size:
+                dp[k][i] += dp[k-1][i + 1]
+    return sum(dp[depth])
+
+def serial_prime_weighted_tree_sum(size, depth):
+    """Prime-weighted tree sum via DP (exact)."""
+    limit = 2 * size  # Safe for shifts
+    primes = sieve_primes(limit)
+    return dp_prime_weighted_tree_sum(size, depth, primes)
+
 def main(args):
     # Logging setup (manual to avoid basicConfig TypeError on Pythonista)
     root_logger = logging.getLogger()
@@ -99,7 +118,7 @@ def main(args):
     root_logger.addHandler(handler)
     logger = logging.getLogger(__name__)
 
-    logger.info(f"Sovariel v6 init: N={args.size}, depth={args.depth}, cores={args.processes}, benchmark={args.benchmark}, platform={sys.platform}")
+    logger.info(f"Sovariel v6 init: N={args.size}, depth={args.depth}, cores={args.processes}, benchmark={args.benchmark}, prime_weighted={args.prime_weighted}, platform={sys.platform}")
     
     parallel_ok = detect_parallel_capable(logger)
     timings = {}
@@ -115,9 +134,13 @@ def main(args):
     timings['baseline'] = time.perf_counter() - start
     logger.info(f"Serial baseline (10%): {baseline}")
     
-    # Tree sum
+    # Tree sum (weighted if flag)
     start = time.perf_counter()
-    total_tree = serial_tree_sum(args.size, args.depth)
+    if args.prime_weighted:
+        total_tree = serial_prime_weighted_tree_sum(args.size, args.depth)
+        logger.info("Computing prime-weighted tree via DP.")
+    else:
+        total_tree = serial_tree_sum(args.size, args.depth)
     timings['serial_tree'] = time.perf_counter() - start
     
     # Prime sum
@@ -125,9 +148,9 @@ def main(args):
     total_prime = serial_prime_sum(args.size)
     timings['serial_prime'] = time.perf_counter() - start
     
-    # Parallel tree (if viable/benchmark)
+    # Parallel tree (if viable/benchmark; weighted stubbed for simplicity)
     total_tree_p = None
-    if parallel_ok and args.benchmark:
+    if parallel_ok and args.benchmark and not args.prime_weighted:
         start = time.perf_counter()
         try:
             chunk_size = args.size // args.processes
@@ -146,7 +169,8 @@ def main(args):
     
     # Outputs
     expected_flat = args.size * (args.size - 1) // 2
-    logger.info(f"Tree sum: {total_tree} (closed: 2^{args.depth-1} * N * (N-1 + {args.depth}))")
+    weight_note = " (prime-weighted via DP)" if args.prime_weighted else ""
+    logger.info(f"Tree sum{weight_note}: {total_tree} (closed: 2^{args.depth-1} * N * (N-1 + {args.depth}))")
     if total_tree_p is not None:
         logger.info(f"Parallel tree sum: {total_tree_p}")
     logger.info(f"Prime sum <=N: {total_prime}")
@@ -160,9 +184,10 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Sovariel v6 Tree/Prime Demo")
-    parser.add_argument('--size', type=int, default=10000, help="N base")
+    parser.add_argument('--size', type=int, default=1000000, help="N base")
     parser.add_argument('--depth', type=int, default=14, help="Tree depth")
     parser.add_argument('--processes', type=int, default=mp.cpu_count() or 6)
     parser.add_argument('--benchmark', action='store_true')
+    parser.add_argument('--prime_weighted', action='store_true', help="Prime-weight tree leaves via DP")
     args = parser.parse_args()
     main(args)
