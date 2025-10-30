@@ -1,4 +1,3 @@
-```python
 #!/usr/bin/env python3
 """
 Sovariel v6: Tree + Prime Sums w/ Verified Closed-Form Fix & iOS Fallback
@@ -167,4 +166,3 @@ if __name__ == '__main__':
     parser.add_argument('--benchmark', action='store_true')
     args = parser.parse_args()
     main(args)
-```
