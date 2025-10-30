@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Sovariel v6.9: Prime-Weighted Path Sums (Node-Level, Prefix O(1))
-- Pickle-safe parallel tree (chunk_tree inside main)
+- FULLY PICKLABLE: tree_sum_worker nested in main()
 - --prime_path: total weighted path sum = prefix[N + 2^d - 1]
 - "primes on nodes, paths weighted" → FULLY IMPLEMENTED
 """
@@ -62,7 +62,7 @@ def verify_formula(d, N):
 
 def prime_path_weighted_sum(size, depth):
     """Total prime-weighted path sum via prefix (O(1) total)."""
-    max_node = size + (1 << depth)  # N + 2^d
+    max_node = size + (1 << depth)
     primes = sieve_primes(max_node)
     prefix = [0] * (max_node + 1)
     for p in primes:
@@ -121,7 +121,7 @@ if __name__ == '__main__':
     # === Parallel Tree (Only if not prime_path) ===
     total_tree_p = None
     if parallel_ok and args.benchmark and not args.prime_path:
-        def chunk_tree(start, end, depth):  # ← Nested here for picklability
+        def tree_sum_worker(start, end, depth):  # ← FULLY NESTED & PICKLABLE
             num = end - start
             if depth < 1: return sum(range(start, end))
             tree_factor_d = 1 << depth
@@ -135,7 +135,7 @@ if __name__ == '__main__':
             chunks = [(i * chunk_size, min((i + 1) * chunk_size, args.size), args.depth)
                       for i in range(args.processes)]
             with mp.Pool(args.processes) as pool:
-                results = pool.starmap(chunk_tree, chunks)
+                results = pool.starmap(tree_sum_worker, chunks)
             total_tree_p = sum(results)
             timings['parallel_tree'] = time.perf_counter() - start
             logger.info("Parallel tree coherent." if total_tree == total_tree_p else f"Mismatch: {total_tree} ≠ {total_tree_p}")
