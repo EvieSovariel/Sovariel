@@ -1,7 +1,8 @@
+```python
 #!/usr/bin/env python3
 """
 Sovariel v6: Tree + Prime Sums w/ Verified Closed-Form Fix & iOS Fallback
-Formula: S(d,n)=2^{d-1}(2n+d); T(d,N)=2^{d-1} N (N-1+d). Usage: [--size 1000000] [--depth 14] [--benchmark]
+Formula: S(d,n)=2^{d} n + d * 2^{d-1}; T(d,N)=2^{d-1} N (N-1 + d). Usage: [--size 1000000] [--depth 14] [--benchmark]
 """
 
 import argparse
@@ -76,11 +77,11 @@ def verify_formula(d, N):
     return rec_total == closed_total, rec_total, closed_total
 
 def chunk_tree(start, end, depth):
-    """Chunked tree sum (closed-form): sum_{n=start}^{end-1} 2^d n + 2^{d-1} d * num."""
+    """Chunked tree sum (closed-form): sum_{n=start}^{end-1} 2^d n + depth * 2^{d-1} * num."""
     num = end - start
     if depth < 1: return sum(range(start, end))
-    tree_factor_d = 1 << depth  # 2^d
-    tree_factor_dm1 = 1 << (depth - 1)  # 2^{d-1}
+    tree_factor_d = 1 << depth  # 2^d for n term
+    tree_factor_dm1 = 1 << (depth - 1)  # 2^{d-1} for depth term
     sum_range = end * (end - 1) // 2 - start * (start - 1) // 2
     return tree_factor_d * sum_range + tree_factor_dm1 * depth * num
 
@@ -166,3 +167,4 @@ if __name__ == '__main__':
     parser.add_argument('--benchmark', action='store_true')
     args = parser.parse_args()
     main(args)
+```
