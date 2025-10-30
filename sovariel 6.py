@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """
-Sovariel v6.9: Prime-Weighted Subtree Path Sums via Prefix Sums
-- O(1) subtree prime sum queries
-- Telescoping total: prefix[N + 2^d - 1]
+Sovariel v6.9: Prime-Weighted Path Sums (Node-Level, Prefix O(1))
 - Pickle-safe parallel tree
-Usage: [--size 1000000] [--depth 14] [--benchmark] [--prime_subtree]
+- --prime_path: total weighted path sum = prefix[N + 2^d - 1]
 """
 
 import argparse
@@ -61,12 +59,9 @@ def verify_formula(d, N):
     closed_total = serial_tree_sum(N, d)
     return rec_total == closed_total, rec_total, closed_total
 
-def serial_prime_sum(size):
-    return sum(sieve_primes(size))
-
-def prime_subtree_weighted_sum(size, depth):
-    """Total prime sum over all root subtrees using prefix."""
-    max_node = size + (1 << depth)  # N + 2^d
+def prime_path_weighted_sum(size, depth):
+    """Total prime-weighted path sum via prefix."""
+    max_node = size + (1 << depth)
     primes = sieve_primes(max_node)
     prefix = [0] * (max_node + 1)
     for p in primes:
@@ -74,8 +69,7 @@ def prime_subtree_weighted_sum(size, depth):
             prefix[p] = p
     for i in range(1, max_node + 1):
         prefix[i] += prefix[i-1]
-    end = size + (1 << depth) - 1
-    return prefix[end]
+    return prefix[size + (1 << depth) - 1]
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -83,7 +77,7 @@ if __name__ == '__main__':
     parser.add_argument('--depth', type=int, default=14)
     parser.add_argument('--processes', type=int, default=mp.cpu_count() or 6)
     parser.add_argument('--benchmark', action='store_true')
-    parser.add_argument('--prime_subtree', action='store_true', help="Prime-weighted subtree sums via prefix")
+    parser.add_argument('--prime_path', action='store_true', help="Prime-weighted path sums")
     args = parser.parse_args()
 
     # === Logging ===
@@ -95,7 +89,7 @@ if __name__ == '__main__':
     root_logger.addHandler(handler)
     logger = logging.getLogger(__name__)
 
-    logger.info(f"Sovariel v6 init: N={args.size}, depth={args.depth}, cores={args.processes}, benchmark={args.benchmark}, prime_subtree={args.prime_subtree}, platform={sys.platform}")
+    logger.info(f"Sovariel v6 init: N={args.size}, depth={args.depth}, cores={args.processes}, benchmark={args.benchmark}, prime_path={args.prime_path}, platform={sys.platform}")
     parallel_ok = detect_parallel_capable(logger)
     timings = {}
 
@@ -111,21 +105,21 @@ if __name__ == '__main__':
 
     # === Tree Sum ===
     start = time.perf_counter()
-    if args.prime_subtree:
-        total_tree = prime_subtree_weighted_sum(args.size, args.depth)
-        logger.info("Computing prime-weighted subtree sums via prefix.")
+    if args.prime_path:
+        total_tree = prime_path_weighted_sum(args.size, args.depth)
+        logger.info("Computing prime-weighted path sums via prefix.")
     else:
         total_tree = serial_tree_sum(args.size, args.depth)
     timings['serial_tree'] = time.perf_counter() - start
 
     # === Prime Sum ===
     start = time.perf_counter()
-    total_prime = serial_prime_sum(args.size)
+    total_prime = sum(sieve_primes(args.size))
     timings['serial_prime'] = time.perf_counter() - start
 
-    # === Parallel Tree (Only if not prime_subtree) ===
+    # === Parallel Tree (Only if not prime_path) ===
     total_tree_p = None
-    if parallel_ok and args.benchmark and not args.prime_subtree:
+    if parallel_ok and args.benchmark and not args.prime_path:
         def chunk_tree(start, end, depth):
             num = end - start
             if depth < 1: return sum(range(start, end))
@@ -143,13 +137,13 @@ if __name__ == '__main__':
                 results = pool.starmap(chunk_tree, chunks)
             total_tree_p = sum(results)
             timings['parallel_tree'] = time.perf_counter() - start
-            logger.info("Parallel tree coherent." if total_tree == total_tree_p else f"Tree mismatch: {total_tree} ≠ {total_tree_p}")
+            logger.info("Parallel tree coherent." if total_tree == total_tree_p else f"Mismatch: {total_tree} ≠ {total_tree_p}")
         except Exception as e:
             logger.warning(f"Parallel tree: {e}")
 
     # === Output ===
     expected_flat = args.size * (args.size - 1) // 2
-    mode = " (prime subtree-weighted)" if args.prime_subtree else ""
+    mode = " (prime path-weighted)" if args.prime_path else ""
     logger.info(f"Tree sum{mode}: {total_tree}")
     if total_tree_p is not None:
         logger.info(f"Parallel tree sum: {total_tree_p}")
@@ -160,4 +154,4 @@ if __name__ == '__main__':
         for k, t in timings.items():
             logger.info(f"Timing {k}: {t:.4f}s")
 
-    logger.info("Sovariel v6 complete—primes mapped, subtrees weighted.")
+    logger.info("Sovariel v6 complete—primes on nodes, paths weighted.")
