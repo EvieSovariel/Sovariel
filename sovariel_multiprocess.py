@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Sovariel v6.9: Prime-Weighted Path Sums (Node-Level, Prefix O(1))
+Sovariel v6.9: Total Sum of All Prime-Weighted Paths (Node-Level, Prefix O(1))
 - FULLY PICKLABLE: tree_sum_worker nested in main()
-- --prime_path: total weighted path sum = prefix[N + 2^d - 1]
-- "primes on nodes, paths weighted" → FULLY IMPLEMENTED
+- --prime_path: TOTAL sum of all root-to-leaf prime-weighted paths
+- "total sum of all prime-weighted paths" → FULLY IMPLEMENTED
 """
 
 import argparse
@@ -61,7 +61,7 @@ def verify_formula(d, N):
     return rec_total == closed_total, rec_total, closed_total
 
 def prime_path_weighted_sum(size, depth):
-    """Total prime-weighted path sum via prefix (O(1) total)."""
+    """TOTAL sum of all prime-weighted paths via prefix (O(1) total)."""
     max_node = size + (1 << depth)
     primes = sieve_primes(max_node)
     prefix = [0] * (max_node + 1)
@@ -78,7 +78,7 @@ if __name__ == '__main__':
     parser.add_argument('--depth', type=int, default=14)
     parser.add_argument('--processes', type=int, default=mp.cpu_count() or 6)
     parser.add_argument('--benchmark', action='store_true')
-    parser.add_argument('--prime_path', action='store_true', help="Prime-weighted path sums (node-level)")
+    parser.add_argument('--prime_path', action='store_true', help="TOTAL sum of all prime-weighted paths")
     args = parser.parse_args()
 
     # === Logging ===
@@ -108,7 +108,7 @@ if __name__ == '__main__':
     start = time.perf_counter()
     if args.prime_path:
         total_tree = prime_path_weighted_sum(args.size, args.depth)
-        logger.info("Computing prime-weighted path sums via prefix (node-level).")
+        logger.info("Computing TOTAL sum of all prime-weighted paths via prefix.")
     else:
         total_tree = serial_tree_sum(args.size, args.depth)
     timings['serial_tree'] = time.perf_counter() - start
@@ -144,7 +144,7 @@ if __name__ == '__main__':
 
     # === Output ===
     expected_flat = args.size * (args.size - 1) // 2
-    mode = " (prime path-weighted)" if args.prime_path else ""
+    mode = " (TOTAL prime path-weighted)" if args.prime_path else ""
     logger.info(f"Tree sum{mode}: {total_tree}")
     if total_tree_p is not None:
         logger.info(f"Parallel tree sum: {total_tree_p}")
@@ -155,4 +155,4 @@ if __name__ == '__main__':
         for k, t in timings.items():
             logger.info(f"Timing {k}: {t:.4f}s")
 
-    logger.info("Sovariel v6 complete—primes on nodes, paths weighted.")
+    logger.info("Sovariel v6 complete—TOTAL sum of all prime-weighted paths.")
