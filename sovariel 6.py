@@ -104,7 +104,7 @@ def dp_prime_weighted_tree_sum(size, depth, primes):
 
 def serial_prime_weighted_tree_sum(size, depth):
     """Prime-weighted tree sum via DP (exact)."""
-    limit = 2 * size  # Safe for shifts
+    limit = size  # Base leaves to N
     primes = sieve_primes(limit)
     return dp_prime_weighted_tree_sum(size, depth, primes)
 
@@ -148,7 +148,7 @@ def main(args):
     total_prime = serial_prime_sum(args.size)
     timings['serial_prime'] = time.perf_counter() - start
     
-    # Parallel tree (if viable/benchmark; weighted stubbed for simplicity)
+    # Parallel tree (if viable/benchmark; weighted skipped for now)
     total_tree_p = None
     if parallel_ok and args.benchmark and not args.prime_weighted:
         start = time.perf_counter()
