@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+# gpu_entropy_vortex.py
+# GPU-Accelerated Entropy Vortex for Bitcoin Puzzle Sweeps
+# ------------------------------------------------------------
+# Features: OpenCL parallel key gen, match sweep, coherence filter
+# Usage: python gpu_entropy_vortex.py [start_hex] [range_size]
+# Example: python gpu_entropy_vortex.py 18d2e6b8d1c4a23a7d6d7a41a26e8efbce15ad70f9e9d5a9d6a52a9a66d349e7 1000000000
+# ------------------------------------------------------------
+
+import sys
+import time
+import numpy as np
+import pyopencl as cl
+import hashlib
+import base58
+from ecdsa import SigningKey, SECP256k1
+
+# === CONFIG ===
+TARGET_ADDRESS = "1Pwo3JeB9jirGwfhDNpdGK54CRas7fsVzXU"
+TARGET_PREFIX = "1Pwo3JeB"
+PUZZLE_NO = 71
+BATCH_SIZE = 1 << 20  # 1M keys per batch (tune for your GPU)
+TARGET_H160 = base58.b58decode_check(TARGET_ADDRESS)[1:]  # RIPEMD160(SHA256(pub)) for fast check
+
+CORE_HEX = "18d2e6b8d1c4a23a7d6d7a41a26e8efbce15ad70f9e9d5a9d6a52a9a66d349e7"
+if len(sys.argv) > 1:
+    CORE_HEX = sys.argv[1]
+if len(sys.argv) > 2:
+    RANGE_SIZE = int(sys.argv[2])
+else:
+    RANGE_SIZE = 10**9  # Default: ±1e9 mutations
+
+# === OpenCL Setup ===
+def init_opencl():
+    platform = cl.get_platforms()[0]
+    device = platform.get_devices()[0]  # Use first GPU/CPU
+    ctx = cl.Context([device])
+    queue = cl.CommandQueue(ctx)
+    return ctx, queue, device
+
+# Simplified OpenCL Kernel for SECP256K1 Pubkey (from hashcat/inc_ecc_secp256k1.cl)
+# Computes compressed pubkey X,Y parity for priv = base + offset
+SEC_P = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
+G_X = 0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798
+G_Y = 0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8
+
+KERNEL_CODE = """
+#define SECP256K1_P %(secp)i
+#define Gx %(gx)i
+#define Gy %(gy)i
+
+// Modular mul/add helpers (simplified for demo; use full montgomery for prod)
+ulong mod_mul(ulong a, ulong b, ulong p) {
+    return (a * b) %% p;
+}
+ulong mod_add(ulong a, ulong b, ulong p) {
+    return (a + b) %% p;
+}
+ulong mod_sub(ulong a, ulong b, ulong p) {
+    return (a + b + p) %% p;  // b negated as -b = p-b
+}
+
+// Point double + add (stubbed; full impl from hashcat for real speed)
+typedef struct { ulong x, y; } Point;
+
+Point point_double(Point p, ulong p_val) {
+    // Full EC double logic here (lambda = (3x^2)/(2y) mod p, etc.)
+    // Placeholder: return p;  // REPLACE WITH REAL ECC
+    return (Point){0, 0};
+}
+Point point_add(Point p1, Point p2, ulong p_val) {
+    // Full EC add logic
+    // Placeholder
+    return (Point){0, 0};
+}
+
+Point scalar_mult(ulong scalar, Point g, ulong p_val) {
+    Point result = {0, 1};  // Infinity
+    Point addend = g;
+    while (scalar > 0) {
+        if (scalar %% 2 == 1) result = point_add(result, addend, p_val);
+        addend = point_double(addend, p_val);
+        scalar /= 2;
+    }
+    return result;
+}
+
+__kernel void compute_pubkeys(__global const ulong* base_priv,
+                              __global const ulong* offsets,
+                              __global uchar* out_pubkeys,  // Compressed pubkey bytes
+                              ulong base_int, ulong batch_size) {
+    int gid = get_global_id(0);
+    if (gid >= batch_size) return;
+
+    ulong priv = base_int + offsets[gid];
+    if (priv == 0) priv = 1;  // Valid priv
+
+    Point g = {Gx, Gy};
+    Point pub = scalar_mult(priv, g, SECP256K1_P);
+
+    // Compressed: 0x02/03 + X (32 bytes)
+    out_pubkeys[gid * 33] = (pub.y %% 2 == 0) ? 0x02 : 0x03;
+    for (int i = 0; i < 32; i++) {
+        out_pubkeys[gid * 33 + 1 + i] = (pub.x >> (i * 8)) & 0xFF;
+    }
+}
+""" % {"secp": SEC_P, "gx": G_X, "gy": G_Y}
+
+# Note: The kernel above is a **stub**. For full speed, replace with hashcat's inc_ecc_secp256k1.cl
+# Download from https://github.com/hashcat/hashcat/blob/master/OpenCL/inc_ecc_secp256k1.cl
+# and inc_types.h, then adapt for priv → compressed pub.
+
+# === CPU Fallback (using ecdsa) ===
+def compute_pubkey_cpu(priv_int: int) -> bytes:
+    priv_bytes = priv_int.to_bytes(32, 'big')
+    sk = SigningKey.from_string(priv_bytes, curve=SECP256K1)
+    vk = sk.verifying_key
+    x = vk.pubkey.point.x().to_bytes(32, 'big')
+    y = vk.pubkey.point.y()
+    prefix = b'\x02' if y % 2 == 0 else b'\x03'
+    return prefix + x
+
+def priv_to_address(pub_compressed: bytes) -> str:
+    h256 = hashlib.sha256(pub_compressed).digest()
+    h160 = hashlib.new('ripemd160', h256).digest()
+    return base58.b58encode_check(b'\x00' + h160).decode()
+
+def priv_to_wif(priv_int: int) -> str:
+    priv_bytes = priv_int.to_bytes(32, 'big')
+    extended = b'\x80' + priv_bytes + b'\x01'
+    return base58.b58encode_check(extended).decode()
+
+# === Vortex Sweep ===
+def gpu_vortex_sweep(base_hex: str, range_size: int):
+    base_int = int(base_hex, 16)
+    ctx, queue, device = init_opencl()
+    prg = cl.Program(ctx, KERNEL_CODE).build()
+
+    print(f"GPU Vortex Activated on {device.name}")
+    print(f"Target: Puzzle #{PUZZLE_NO} ({TARGET_ADDRESS})")
+    print(f"Range: {base_int} ± {range_size:,} keys")
+    print(f"Batch: {BATCH_SIZE:,} keys")
+
+    start_time = time.time()
+    keys_checked = 0
+    found = None
+
+    try:
+        # Generate offsets array
+        offsets = np.arange(range_size, dtype=np.uint64)
+        offsets = offsets - (range_size // 2)  # Center around 0
+
+        # GPU: Compute pubkeys in batches
+        num_batches = (len(offsets) + BATCH_SIZE - 1) // BATCH_SIZE
+        for b in range(num_batches):
+            batch_start = b * BATCH_SIZE
+            batch_end = min(batch_start + BATCH_SIZE, len(offsets))
+            batch_offsets = offsets[batch_start:batch_end]
+
+            # Alloc GPU buffers
+            mf = cl.mem_flags
+            base_buf = cl.Buffer(ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=np.uint64(base_int))
+            off_buf = cl.Buffer(ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=batch_offsets)
+            out_buf = cl.Buffer(ctx, mf.WRITE_ONLY, batch_offsets.nbytes * 33 // 8)  # ~33 bytes per pub
+
+            # Run kernel
+            prg.compute_pubkeys(queue, (len(batch_offsets),), None,
+                                base_buf, off_buf, out_buf, np.uint64(base_int), np.uint64(len(batch_offsets)))
+
+            # Read back pubkeys
+            pubs = np.frombuffer(cl.enqueue_copy(queue, out_buf, is_blocking=True), dtype=np.uint8)
+            pubs = pubs.reshape((len(batch_offsets), 33))
+
+            # CPU post-process: Hash + check match
+            for i, pub in enumerate(pubs):
+                pub_comp = pub.tobytes()
+                if pub_comp[0] not in (2, 3): continue  # Invalid prefix
+
+                addr = priv_to_address(pub_comp)
+                keys_checked += 1
+
+                if addr == TARGET_ADDRESS:
+                    priv_found = base_int + int(batch_offsets[i])
+                    found = {
+                        'priv_hex': f"{priv_found:064x}",
+                        'wif': priv_to_wif(priv_found),
+                        'address': addr
+                    }
+                    break
+                elif addr.startswith(TARGET_PREFIX):
+                    print(f"High Coherence! Addr: {addr} (offset: {batch_offsets[i]})")
+
+            if found:
+                break
+
+            if keys_checked % 10**6 == 0:
+                rate = keys_checked / (time.time() - start_time)
+                print(f"Checked {keys_checked:,} keys @ {rate:,.0f} keys/sec")
+
+    except Exception as e:
+        print(f"GPU Error: {e}. Falling back to CPU.")
+        # CPU Fallback (multiprocess for speed)
+        from multiprocessing import Pool
+        def check_offset(off):
+            priv = base_int + off
+            pub = compute_pubkey_cpu(priv)
+            addr = priv_to_address(pub)
+            if addr == TARGET_ADDRESS:
+                return {'priv_hex': f"{priv:064x}", 'wif': priv_to_wif(priv), 'address': addr}
+            return None
+
+        with Pool() as p:
+            results = p.map(check_offset, offsets[:1000000])  # Limit for demo
+            found = next((r for r in results if r), None)
+
+    elapsed = time.time() - start_time
+    print(f"\nSweep complete: {keys_checked:,} keys in {elapsed:.2f}s ({keys_checked/elapsed:,.0f} keys/sec)")
+
+    if found:
+        print("\n🎉 PUZZLE SOLVED! 🎉")
+        print(f"Private Key (hex): {found['priv_hex']}")
+        print(f"WIF: {found['wif']}")
+        print(f"Address: {found['address']}")
+        sweep_script = f"""
+# Auto-Sweep Script (Electrum): electrum importprivkey {found['wif']} Puzzle71
+# Or Bitcoin Core: importprivkey {found['wif']} "Puzzle71" false
+# Claim TX: Send to your wallet + broadcast!
+        """
+        print(sweep_script)
+        return found
+    else:
+        print("No match found. Increase range or tweak core.")
+        return None
+
+# === Run ===
+if __name__ == "__main__":
+    found = gpu_vortex_sweep(CORE_HEX, RANGE_SIZE)
+    if not found:
+        print("Vortex stable. Ready for next run.")
