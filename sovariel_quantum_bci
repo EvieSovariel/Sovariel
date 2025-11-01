@@ -1,0 +1,44 @@
+import numpy as np
+import qiskit
+
+def phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr, fs=250):
+    # Phase sync via FFT
+    fft_eeg = np.fft.fft(epochs_data.mean(axis=1))
+    phase_eeg = np.unwrap(np.angle(fft_eeg))[:len(epochs_data)]
+    hrv_time = np.linspace(0, len(hrv_rr) / fs, len(hrv_rr))
+    eeg_time = np.linspace(0, len(epochs_data) / fs, len(epochs_data))
+    hrv_phase = np.interp(eeg_time, hrv_time, np.unwrap(np.angle(np.fft.fft(hrv_rr))))[:len(epochs_data)]
+    phase_diff = phase_eeg - hrv_phase
+    lock_strength = np.abs(np.mean(np.exp(1j * phase_diff)))
+
+    # Quantum bias
+    qc = qiskit.QuantumCircuit(1, 1)
+    qc.h(0)
+    qc.measure(0, 0)
+    backend = qiskit.Aer.get_backend('qasm_simulator')
+    job = qiskit.execute(qc, backend, shots=1024)
+    result = job.result().get_counts()
+    total_shots = sum(result.values())
+    q_bias = sum(1 for state in result if state == '1') / total_shots
+    quantum_weight = q_bias * 0.5 + 0.5
+
+    # Quantum-weighted lock
+    q_lock_strength = lock_strength * quantum_weight
+    tokens = epochs_data.size
+    large = tokens // 3 + 1
+    d_adjust = int(q_lock_strength * large * 0.1)
+    return d_adjust, q_lock_strength
+
+# BCI-ready partitioning
+def sovariel_quantum_partition(epochs_data, hrv_rr):
+    d, q_lock = phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr)
+    d = 9104 + d
+    l = epochs_data.size // d
+    segments = epochs_data.reshape(-1, d, l)
+    return np.mean(segments, axis=(1, 2)) * q_lock_strength
+
+# Example usage (adapt for BCI stream)
+epochs_data = np.random.rand(1000, 22)  # Mock EEG
+hrv_rr = np.random.rand(1000)  # Mock HRV
+result = sovariel_quantum_partition(epochs_data, hrv_rr)
+print(f"Quantum-Weighted Output: {result[:5]}")  # Sample
