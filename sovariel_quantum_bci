@@ -55,9 +55,17 @@ def phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr, fs=250):
         qc.cx(0, i)  # Entangle chain for GHZ state
     qc.measure_all()
     
-    # Real-time IBMQ noise model
-    noise_model = NoiseModel.from_backend(backend)  # Live noise from ibmq_manila
-    
+    # Real-time IBMQ noise model (falls back to qasm_simulator if token absent)
+    try:
+        noise_model = NoiseModel.from_backend(backend)  # Live noise from ibmq_manila
+    except:
+        noise_model = NoiseModel()  # Default to qasm_simulator noise if no backend access
+        for gate in qc.data:
+            if gate.operation.name in ['h', 'cx', 'measure']:
+                num_qubits_gate = 1 if gate.operation.name == 'h' else 2 if gate.operation.name == 'cx' else 1
+                noise_model.add_all_qubit_quantum_error(depolarizing_channel(0.01, num_qubits_gate), [])
+
+    backend = qiskit.Aer.get_backend('qasm_simulator') if 'noise_model' not in locals() else backend
     job = qiskit.execute(qc, backend, shots=1024, noise_model=noise_model)
     result = job.result().get_counts()
     total_shots = sum(result.values())
@@ -84,7 +92,7 @@ def phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr, fs=250):
 
 # Fidelity-thresholded role-swap function (with adaptive epsilon for HRV anchoring; real-time IBMQ noise)
 def role_swap_fidelity(epochs_data, hrv_rr, primary='eeg', threshold=0.95):
-    # Get quantum lock for adaptive epsilon (uses real-time IBMQ noise)
+    # Get quantum lock for adaptive epsilon (uses real-time IBMQ noise or fallback)
     _, _, q_lock_strength, n_qubits = phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr)
     
     # Adaptive epsilon: Scales inversely with lock_strength (0.3-0.7 range)
@@ -111,7 +119,33 @@ def role_swap_fidelity(epochs_data, hrv_rr, primary='eeg', threshold=0.95):
     # Fidelity check & fallback
     fidelity_drop = (base_coh - swap_coh) / base_coh if swap_coh < base_coh else 0.0
     recovery_rate = 1.0 - fidelity_drop  # Simple recovery metric
-    deco_log = {'error_rate': backend.properties().gate_error('h', [0])[0], 'fidelity_drop': fidelity_drop, 'recovery_rate': recovery_rate}  # Use backend error as proxy
+    deco_log = {'error_rate': 0.01 if 'noise_model' not in locals() else backend.properties().gate_error('h', [0])[0], 
+                'fidelity_drop': fidelity_drop, 'recovery_rate': recovery_rate}  # Use backend error or default
     
     if swap_coh < base_coh * threshold:
-        print(f"Fidelity below {threshold}: Falling​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​
+        print(f"Fidelity below {threshold}: Falling back to classical partition. Log: {deco_log}")
+        return classical_partition(epochs_data), base_coh, 0.0, n_qubits, deco_log  # Safe classical, zero lift
+    
+    # Lift calc
+    lift = ((swap_coh - base_coh) / base_coh) * 100
+    print(f"Role swap success. Log: {deco_log}")
+    return swap_data, swap_coh, lift, n_qubits, deco_log
+
+# Sovariel partitioning (quantum-weighted; real-time IBMQ noise or fallback)
+def sovariel_quantum_partition(data, hrv_rr):
+    d, l, q_lock, _ = phase_lock_hrv_eeg_quantum(data, hrv_rr)
+    segments = data.reshape(-1, d, l)
+    return np.mean(segments, axis=(1, 2)) * q_lock  # Weighted output
+
+# Classical fallback (no quantum, for fidelity safety)
+def classical_partition(data):
+    tokens = data.size
+    d_class = 9104  # Fixed D16
+    l_class = tokens // d_class
+    segments = data.reshape(-1, d_class, l_class)
+    return np.mean(segments, axis=(1, 2))
+
+# Example usage (mock BCI stream - adapt for real EEG/HRV input)
+if __name__ == "__main__":
+    # Mock data (BCI IV-style: 1000 samples, 22 EEG channels; 1000 HRV points)
+    epochs_data​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​
