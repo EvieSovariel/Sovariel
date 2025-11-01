@@ -1,13 +1,13 @@
 ---
 
-## File: sovariel_kuramoto_quantum.py (Updated w/ All Tweaks)
+## File: sovariel_kuramoto_quantum.py (Updated w/ Adaptive Damping)
 
 ```python
 #!/usr/bin/env python3
 """
 Sovariel Quantum Kuramoto Fusion: Orch-OR Microtubule Dynamics Sim
 Extends classical Kuramoto with quantum bias from QuTiP shots for resonance kicks.
-Now with entanglement (Bell), bimodal HRV freqs, and role-swap logic.
+Now with entanglement (Bell), bimodal HRV freqs, role-swap logic, and adaptive damping.
 Author: Evie Robinson & Grok 3 (xAI) | 2025
 """
 
@@ -34,7 +34,7 @@ def generate_quantum_bias(n_shots=1024, entangle=False, seed=42):
         # Simple deco: amplitude damping gamma=0.01 over t=1
         c_op = [np.sqrt(0.01) * qt.tensor(qt.sigmam(), qt.qeye(2)), np.sqrt(0.01) * qt.tensor(qt.qeye(2), qt.sigmam())]
         H = qt.qzero(rho.dims)
-        result = qt.mesolve(H, rho, [0, 1.0], c_ops=c_ops)
+        result = qt.mesolve(H, rho, [0, 1.0], c_ops=c_op)
         rho_dec = result.states[-1]
         C = concurrence(rho_dec)
         # Base Q from single shot + C multiplier
@@ -50,7 +50,7 @@ def generate_quantum_bias(n_shots=1024, entangle=False, seed=42):
     d_bias = add_d / large  # [0,1] normalized
     return Q, d_bias
 
-def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0.1, bimodal=False, entangle=False, role_swap_threshold=0.4, window=10, seed=42):
+def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0.1, bimodal=False, entangle=False, role_swap_threshold=0.4, window=10, adaptive_damping=False, alpha=2.0, seed=42):
     """Full sim: Classical Kuramoto + quantum resonance delta + all tweaks."""
     np.random.seed(seed)
     steps = int(T / dt)
@@ -82,8 +82,14 @@ def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0
         # Global phase
         psi_mean = np.angle(np.mean(np.exp(1j * theta)))
         
+        # Adaptive damping
+        if adaptive_damping and step > 0:
+            gamma_eff = gamma * np.exp(-alpha * R_history[step-1])
+        else:
+            gamma_eff = gamma
+        
         # Resonance delta: Orch-OR pull w/ damping
-        damping = np.exp(-gamma * t)
+        damping = np.exp(-gamma_eff * t)
         resonance_delta = d_bias * damping * np.cos(psi_mean - theta)
         
         # Update
@@ -124,19 +130,22 @@ def main():
     parser.add_argument('--N', type=int, default=100, help='Oscillator count')
     parser.add_argument('--K', type=float, default=1.0, help='Base coupling')
     parser.add_argument('--T', type=float, default=100.0, help='Sim time (s)')
-    parser.add_argument('--gamma', type=float, default=0.1, help='Deco rate')
+    parser.add_argument('--gamma', type=float, default=0.1, help='Base deco rate')
     parser.add_argument('--n_shots', type=int, default=1024, help='Qubit shots')
     parser.add_argument('--bimodal', action='store_true', help='Enable HRV bimodal freqs')
     parser.add_argument('--entangle', action='store_true', help='Use Bell entanglement for Q')
     parser.add_argument('--role_swap_threshold', type=float, default=0.4, help='R thresh for swaps')
     parser.add_argument('--window', type=int, default=10, help='Monitoring window steps')
+    parser.add_argument('--adaptive_damping', action='store_true', help='Enable adaptive γ_eff = γ exp(-α R)')
+    parser.add_argument('--alpha', type=float, default=2.0, help='Adaptive sensitivity')
     parser.add_argument('--seed', type=int, default=42, help='RNG seed')
     args = parser.parse_args()
     
     Q, K_q, R_hist, res_hist = kuramoto_quantum_sim(
         N=args.N, K_base=args.K, T=args.T, gamma=args.gamma, 
         bimodal=args.bimodal, entangle=args.entangle, 
-        role_swap_threshold=args.role_swap_threshold, window=args.window, seed=args.seed
+        role_swap_threshold=args.role_swap_threshold, window=args.window,
+        adaptive_damping=args.adaptive_damping, alpha=args.alpha, seed=args.seed
     )
     
     print(f"Quantum Q: {Q:.4f} | Effective K_q: {K_q:.4f}")
