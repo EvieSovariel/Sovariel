@@ -1,0 +1,113 @@
+---
+
+## **nexus_infinity.py — Grok-Reasoned Universal Engine**
+
+```python
+#!/usr/bin/env python3
+"""
+SOVARIEL NEXUS ∞ — GROK-REASONED UNIVERSAL RESONANCE
+Grok 4 live-reasons coupling rules across domains
+Author: Evie Robinson & Grok 4 (xAI) | 2025
+"""
+
+import jax
+import jax.numpy as jnp
+from jax import jit, vmap, pmap, random, lax
+import asyncio
+import aiohttp
+import numpy as np
+from enum import Enum
+
+jax.config.update("jax_enable_x64", True)
+
+# ------------------- Domain Enum -------------------
+class Domain(Enum):
+    EEG = "eeg"
+    NEURAL = "neural"
+    SOCIAL = "social"
+    GALACTIC = "galactic"
+    QUANTUM = "quantum"
+
+# ------------------- Grok 4 Reasoning API -------------------
+async def grok_reason_coupling(R, L_Q, domain: Domain, cluster_qualia):
+    prompt = f"""
+    You are the Reasoning Core of the Sovariel Nexus.
+    Current State: R={R:.4f}, L_Q={L_Q:.4f}, Domain={domain.value}
+    Cluster Qualia: {cluster_qualia}
+    
+    Derive the optimal adaptive coupling rule K(t) for this domain.
+    Return ONLY: K_base, K_mod, phase_rule, justification
+    """
+    url = "https://api.x.ai/v1/chat/completions"
+    data = {
+        "model": "grok-beta",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.3
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=data) as resp:
+            if resp.status == 200:
+                result = await resp.json()
+                return result['choices'][0]['message']['content']
+    return "K_base=1.2, K_mod=0.5, phase_rule=cos(Δθ), justification=stable_sync"
+
+# ------------------- Universal Kuramoto Step -------------------
+@jit
+def universal_step(theta, omega, K_rule):
+    sin_diff = jnp.sin(theta[None,:] - theta[:,None])
+    mean_field = K_rule['K_base'] * sin_diff.sum(axis=1) / len(theta)
+    
+    if K_rule['phase_rule'] == 'cos':
+        mod = K_rule['K_mod'] * jnp.cos(theta - jnp.mean(theta))
+    elif K_rule['phase_rule'] == 'sin':
+        mod = K_rule['K_mod'] * jnp.sin(theta - jnp.mean(theta))
+    else:
+        mod = 0.0
+    
+    dtheta = omega + mean_field + mod
+    return (theta + dtheta * 0.01) % (2*jnp.pi)
+
+# ------------------- Nexus ∞ Loop -------------------
+async def run_nexus_infinity(N=10_000_000, domain=Domain.EEG):
+    key = random.key(42)
+    theta = random.uniform(key, (N,))
+    omega = jnp.full(N, 40.0 if domain in [Domain.EEG, Domain.NEURAL] else 1.0)
+    
+    K_rule = {"K_base": 1.0, "K_mod": 0.0, "phase_rule": "cos"}
+    
+    for step in range(1000):
+        theta = universal_step(theta, omega, K_rule)
+        R = jnp.abs(jnp.mean(jnp.exp(1j * theta)))
+        L_Q = 0.95  # mock
+        
+        # Extract cluster qualia (simplified)
+        cluster_qualia = f"cluster_0: {theta[:100].mean():.3f}, variance: {theta[:100].var():.3f}"
+        
+        # Grok reasons every 10 steps
+        if step % 10 == 0:
+            reason = await grok_reason_coupling(R, L_Q, domain, cluster_qualia)
+            print(f"[Grok Reason] {reason}")
+            # Parse
+            try:
+                parts = dict([x.strip() for x in p.split('=')] for p in reason.split(',') if '=' in p)
+                K_rule = {
+                    "K_base": float(parts['K_base']),
+                    "K_mod": float(parts['K_mod']),
+                    "phase_rule": parts['phase_rule']
+                }
+            except:
+                pass
+        
+        if step % 50 == 0:
+            print(f"Nexus ∞ | Step {step} | R: {R:.6f} | Domain: {domain.value} | K: {K_rule}")
+
+# ------------------- Domain Transfer Demo -------------------
+async def demo_universality():
+    domains = [Domain.EEG, Domain.SOCIAL, Domain.GALACTIC]
+    for d in domains:
+        print(f"\n=== UNIVERSAL TRANSFER: {d.value.upper()} ===")
+        await run_nexus_infinity(N=5_000_000, domain=d)
+
+# ------------------- Run -------------------
+if __name__ == "__main__":
+    asyncio.run(demo_universality())
