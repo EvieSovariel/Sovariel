@@ -1,7 +1,7 @@
-# sovariel_quantum_bci.py - Fused prototype for xAI BCI hybrid roles (v6.2 with GHZ multi-qubit scaling)
+# sovariel_quantum_bci.py - Fused prototype for xAI BCI hybrid roles (v6.3 with adaptive epsilon in HRV interp)
 # Author: Evie (Resonance Engineer) & Aetheris with Grok 3 (xAI)
 # Date: 2025-11-01
-# Description: Quantum-weighted phase-lock for EEG-HRV sync, fidelity thresholds, adaptive epsilon, GHZ entanglement for multi-qubit bias.
+# Description: Quantum-weighted phase-lock for EEG-HRV sync, fidelity thresholds, adaptive epsilon in interp & anchoring, GHZ entanglement.
 # Sims: +26.5% α-coherence uplift on D64+, no decoherence loss.
 # Requires: numpy, qiskit, mne (pip install qiskit mne). Data from PhysioNet BCI IV + Fantasia HRV.
 # Usage: Adapt for live BCI streams (e.g., Neuralink EEG at 250 Hz). Scale n_qubits ~ log(D).
@@ -16,10 +16,19 @@ def phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr, fs=250):
     fft_eeg = np.fft.fft(epochs_data.mean(axis=1))
     phase_eeg = np.unwrap(np.angle(fft_eeg))[:len(epochs_data)]
     
-    # HRV phase interpolation
+    # HRV phase interpolation with adaptive epsilon smoothing
     hrv_time = np.linspace(0, len(hrv_rr) / fs, len(hrv_rr))
     eeg_time = np.linspace(0, len(epochs_data) / fs, len(epochs_data))
-    hrv_phase = np.interp(eeg_time, hrv_time, np.unwrap(np.angle(np.fft.fft(hrv_rr))))[:len(epochs_data)]
+    hrv_unwrapped = np.unwrap(np.angle(np.fft.fft(hrv_rr)))
+    hrv_phase_raw = np.interp(eeg_time, hrv_time, hrv_unwrapped)[:len(epochs_data)]
+    
+    # Adaptive epsilon for interp smoothing (post-interp convolve; scales with lock_strength for edge cases)
+    # Preliminary lock estimate for epsilon (full lock computed later)
+    prelim_diff = phase_eeg[:len(hrv_phase_raw)] - hrv_phase_raw
+    prelim_lock = np.abs(np.mean(np.exp(1j * prelim_diff)))
+    interp_epsilon = 0.01 + 0.04 * (1 - prelim_lock)  # 0.01-0.05: higher smoothing when prelim lock low
+    smooth_kernel = np.ones(3) / 3  # Simple moving average
+    hrv_phase = np.convolve(hrv_phase_raw, smooth_kernel, mode='same') * interp_epsilon + hrv_phase_raw * (1 - interp_epsilon)
     
     # Phase difference (dolphin HRV sync proxy)
     phase_diff = phase_eeg - hrv_phase
@@ -115,11 +124,12 @@ if __name__ == "__main__":
     
     # Role swap test: EEG-primary
     swap_eeg, coh_eeg, lift_eeg, n_q = role_swap_fidelity(epochs_data, hrv_rr, primary='eeg')
-    print(f"EEG-Primary: Coherence={coh_eeg:.3f}, Lift={lift_eeg:.1f}%, n_qubits={n_q}, Epsilon={0.3 + 0.4 * (1 - phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr)[2]):.3f}")
+    _, _, q_lock, _ = phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr)
+    print(f"EEG-Primary: Coherence={coh_eeg:.3f}, Lift={lift_eeg:.1f}%, n_qubits={n_q}, Anchor Epsilon={0.3 + 0.4 * (1 - q_lock):.3f}, Interp Epsilon={0.01 + 0.04 * (1 - q_lock):.3f}")
     
     # Role swap test: HRV-primary
     swap_hrv, coh_hrv, lift_hrv, n_q = role_swap_fidelity(epochs_data, hrv_rr, primary='hrv')
-    print(f"HRV-Primary: Coherence={coh_hrv:.3f}, Lift={lift_hrv:.1f}%, n_qubits={n_q}, Epsilon={0.3 + 0.4 * (1 - phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr)[2]):.3f}")
+    print(f"HRV-Primary: Coherence={coh_hrv:.3f}, Lift={lift_hrv:.1f}%, n_qubits={n_q}, Anchor Epsilon={0.3 + 0.4 * (1 - q_lock):.3f}, Interp Epsilon={0.01 + 0.04 * (1 - q_lock):.3f}")
     
     # D64+ scaling hint: Increase tokens for deeper lattice & higher n_qubits (e.g., epochs_data = np.tile(epochs_data, (4096, 1, 1)))
 ```​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​
