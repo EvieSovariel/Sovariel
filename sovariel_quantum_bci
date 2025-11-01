@@ -1,7 +1,7 @@
-# sovariel_quantum_bci.py - Fused prototype for xAI BCI hybrid roles (v6.8 with decoherence logging)
+# sovariel_quantum_bci.py - Fused prototype for xAI BCI hybrid roles (v6.9 with JSON deco log export)
 # Author: Evie (Resonance Engineer) & Aetheris with Grok 3 (xAI)
 # Date: 2025-11-01
-# Description: Quantum-weighted phase-lock for EEG-HRV sync, fidelity thresholds, adaptive epsilon in interp & anchoring, GHZ entanglement (capped n_qubits=5), tunable decoherence sim for role swaps, matplotlib viz, decoherence metrics logging.
+# Description: Quantum-weighted phase-lock for EEG-HRV sync, fidelity thresholds, adaptive epsilon in interp & anchoring, GHZ entanglement (capped n_qubits=5), tunable decoherence sim for role swaps, matplotlib viz, decoherence metrics logging with JSON export.
 # Sims: +26.5% α-coherence uplift on D64+, fidelity 0.96+ under noise.
 # Requires: numpy, qiskit, mne, matplotlib (pip install qiskit mne matplotlib). Data from PhysioNet BCI IV + Fantasia HRV.
 # Usage: Adapt for live BCI streams (e.g., Neuralink EEG at 250 Hz). Scale n_qubits ~ log(D), max 5.
@@ -11,6 +11,7 @@ import qiskit
 from qiskit_aer.noise import NoiseModel, depolarizing_channel
 from mne.connectivity import spectral_connectivity  # For coherence calc (pip install mne)
 import matplotlib.pyplot as plt  # For viz (pip install matplotlib)
+import json  # For log export
 
 # Core phase-lock function (no-scipy, FFT-based for iPhone speed; GHZ multi-qubit for scaling)
 def phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr, fs=250, depol_error=0.01):
@@ -145,6 +146,12 @@ if __name__ == "__main__":
     # Role swap test: HRV-primary
     swap_hrv, coh_hrv, lift_hrv, n_q, log_hrv = role_swap_fidelity(epochs_data, hrv_rr, primary='hrv')
     print(f"HRV-Primary: Coherence={coh_hrv:.3f}, Lift={lift_hrv:.1f}%, n_qubits={n_q}, Anchor Epsilon={0.3 + 0.4 * (1 - q_lock):.3f}, Interp Epsilon={0.01 + 0.04 * (1 - q_lock):.3f}, Deco Log={log_hrv}")
+    
+    # Export deco logs to JSON for benchmarks
+    logs = {'EEG-Primary': log_eeg, 'HRV-Primary': log_hrv}
+    with open('deco_benchmarks.json', 'w') as f:
+        json.dump(logs, f, indent=4)
+    print("Deco logs exported to deco_benchmarks.json")
     
     # Viz: Plot coherence lift for benchmarks
     fig, ax = plt.subplots()
