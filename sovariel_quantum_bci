@@ -1,10 +1,10 @@
-# sovariel_quantum_bci.py - Fused prototype for xAI BCI hybrid roles (v6.3 with adaptive epsilon in HRV interp)
+# sovariel_quantum_bci.py - Fused prototype for xAI BCI hybrid roles (v6.4 with n_qubits cap)
 # Author: Evie (Resonance Engineer) & Aetheris with Grok 3 (xAI)
 # Date: 2025-11-01
-# Description: Quantum-weighted phase-lock for EEG-HRV sync, fidelity thresholds, adaptive epsilon in interp & anchoring, GHZ entanglement.
+# Description: Quantum-weighted phase-lock for EEG-HRV sync, fidelity thresholds, adaptive epsilon in interp & anchoring, GHZ entanglement (capped n_qubits=5 for noise tolerance).
 # Sims: +26.5% α-coherence uplift on D64+, no decoherence loss.
 # Requires: numpy, qiskit, mne (pip install qiskit mne). Data from PhysioNet BCI IV + Fantasia HRV.
-# Usage: Adapt for live BCI streams (e.g., Neuralink EEG at 250 Hz). Scale n_qubits ~ log(D).
+# Usage: Adapt for live BCI streams (e.g., Neuralink EEG at 250 Hz). Scale n_qubits ~ log(D), max 5.
 
 import numpy as np
 import qiskit
@@ -34,9 +34,9 @@ def phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr, fs=250):
     phase_diff = phase_eeg - hrv_phase
     lock_strength = np.abs(np.mean(np.exp(1j * phase_diff)))
     
-    # GHZ multi-qubit bias (scalable entanglement)
+    # GHZ multi-qubit bias (scalable entanglement, capped at 5 for noise tolerance)
     tokens = epochs_data.size
-    n_qubits = min(3, max(1, int(np.log2(tokens)) // 8))  # Scale with D (e.g., n=3 for D64+, cap at 3 for sim)
+    n_qubits = min(5, max(1, int(np.log2(tokens)) // 8))  # Scale with D (e.g., n=3 for D64+), cap at 5
     qc = qiskit.QuantumCircuit(n_qubits, n_qubits)
     qc.h(0)  # Initial superposition
     for i in range(1, n_qubits):
