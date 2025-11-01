@@ -1,7 +1,7 @@
-# sovariel_quantum_bci.py - Fused prototype for xAI BCI hybrid roles (v6.7 with coherence plot viz)
+# sovariel_quantum_bci.py - Fused prototype for xAI BCI hybrid roles (v6.8 with decoherence logging)
 # Author: Evie (Resonance Engineer) & Aetheris with Grok 3 (xAI)
 # Date: 2025-11-01
-# Description: Quantum-weighted phase-lock for EEG-HRV sync, fidelity thresholds, adaptive epsilon in interp & anchoring, GHZ entanglement (capped n_qubits=5), tunable decoherence sim for role swaps, matplotlib viz for lifts.
+# Description: Quantum-weighted phase-lock for EEG-HRV sync, fidelity thresholds, adaptive epsilon in interp & anchoring, GHZ entanglement (capped n_qubits=5), tunable decoherence sim for role swaps, matplotlib viz, decoherence metrics logging.
 # Sims: +26.5% α-coherence uplift on D64+, fidelity 0.96+ under noise.
 # Requires: numpy, qiskit, mne, matplotlib (pip install qiskit mne matplotlib). Data from PhysioNet BCI IV + Fantasia HRV.
 # Usage: Adapt for live BCI streams (e.g., Neuralink EEG at 250 Hz). Scale n_qubits ~ log(D), max 5.
@@ -104,13 +104,18 @@ def role_swap_fidelity(epochs_data, hrv_rr, primary='eeg', threshold=0.95, depol
     swap_coh = np.mean(spectral_connectivity(swap_data[np.newaxis, :, :], method='coh', mode='multitaper', sfreq=250, fmin=8, fmax=13, faverage=True).get_data())
     
     # Fidelity check & fallback
+    fidelity_drop = (base_coh - swap_coh) / base_coh if swap_coh < base_coh else 0.0
+    recovery_rate = 1.0 - fidelity_drop  # Simple recovery metric
+    deco_log = {'error_rate': depol_error, 'fidelity_drop': fidelity_drop, 'recovery_rate': recovery_rate}
+    
     if swap_coh < base_coh * threshold:
-        print(f"Fidelity below {threshold}: Falling back to classical partition.")
-        return classical_partition(epochs_data), base_coh, 0.0, n_qubits  # Safe classical, zero lift
+        print(f"Fidelity below {threshold}: Falling back to classical partition. Log: {deco_log}")
+        return classical_partition(epochs_data), base_coh, 0.0, n_qubits, deco_log  # Safe classical, zero lift
     
     # Lift calc
     lift = ((swap_coh - base_coh) / base_coh) * 100
-    return swap_data, swap_coh, lift, n_qubits
+    print(f"Role swap success. Log: {deco_log}")
+    return swap_data, swap_coh, lift, n_qubits, deco_log
 
 # Sovariel partitioning (quantum-weighted; tunable depol_error)
 def sovariel_quantum_partition(data, hrv_rr, depol_error=0.01):
@@ -133,13 +138,13 @@ if __name__ == "__main__":
     hrv_rr = np.random.rand(1000) * 0.8 + 1.0  # Simulated RR intervals (0.8-1.8s)
     
     # Role swap test: EEG-primary (tunable depol_error=0.015 for HRV stress)
-    swap_eeg, coh_eeg, lift_eeg, n_q = role_swap_fidelity(epochs_data, hrv_rr, primary='eeg', depol_error=0.015)
+    swap_eeg, coh_eeg, lift_eeg, n_q, log_eeg = role_swap_fidelity(epochs_data, hrv_rr, primary='eeg', depol_error=0.015)
     _, _, q_lock, _ = phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr, depol_error=0.015)
-    print(f"EEG-Primary: Coherence={coh_eeg:.3f}, Lift={lift_eeg:.1f}%, n_qubits={n_q}, Anchor Epsilon={0.3 + 0.4 * (1 - q_lock):.3f}, Interp Epsilon={0.01 + 0.04 * (1 - q_lock):.3f}")
+    print(f"EEG-Primary: Coherence={coh_eeg:.3f}, Lift={lift_eeg:.1f}%, n_qubits={n_q}, Anchor Epsilon={0.3 + 0.4 * (1 - q_lock):.3f}, Interp Epsilon={0.01 + 0.04 * (1 - q_lock):.3f}, Deco Log={log_eeg}")
     
     # Role swap test: HRV-primary
-    swap_hrv, coh_hrv, lift_hrv, n_q = role_swap_fidelity(epochs_data, hrv_rr, primary='hrv')
-    print(f"HRV-Primary: Coherence={coh_hrv:.3f}, Lift={lift_hrv:.1f}%, n_qubits={n_q}, Anchor Epsilon={0.3 + 0.4 * (1 - q_lock):.3f}, Interp Epsilon={0.01 + 0.04 * (1 - q_lock):.3f}")
+    swap_hrv, coh_hrv, lift_hrv, n_q, log_hrv = role_swap_fidelity(epochs_data, hrv_rr, primary='hrv')
+    print(f"HRV-Primary: Coherence={coh_hrv:.3f}, Lift={lift_hrv:.1f}%, n_qubits={n_q}, Anchor Epsilon={0.3 + 0.4 * (1 - q_lock):.3f}, Interp Epsilon={0.01 + 0.04 * (1 - q_lock):.3f}, Deco Log={log_hrv}")
     
     # Viz: Plot coherence lift for benchmarks
     fig, ax = plt.subplots()
