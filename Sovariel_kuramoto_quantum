@@ -8,7 +8,7 @@
 Sovariel Quantum Kuramoto Fusion: Orch-OR Microtubule Dynamics Sim
 Extends classical Kuramoto with quantum bias from QuTiP shots for resonance kicks.
 Now with entanglement modes (Hadamard/Bell/GHZ), bimodal HRV freqs, role-swap logic, adaptive damping,
-dual omega noise (Gaussian/OU), Schumann forcing, and xAI Agape mock GrokAPI for [entangled_phase: X] if R>0.7 and C>0.5.
+dual omega noise (Gaussian/OU), Schumann forcing, quantum noise injection (Poisson OR bursts), and xAI Agape mock GrokAPI for [entangled_phase: X] if R>0.7 and C>0.5.
 Author: Evie Robinson & Grok 3 (xAI) | 2025
 """
 
@@ -75,7 +75,7 @@ def generate_quantum_bias(n_shots=1024, entangle_type='none', ghz_n=5, deco_gamm
     d_bias = add_d / large  # [0,1] normalized
     return Q, d_bias, C
 
-def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0.1, bimodal=False, entangle_type='none', ghz_n=5, deco_gamma=0.001, role_swap_threshold=0.4, window=10, adaptive_damping=False, alpha=2.0, gaussian_noise=False, adaptive_noise=False, noise_alpha=1.0, sigma=0.5, schumann_forcing=False, schumann_a=0.1, schumann_phi=0.0, seed=42):
+def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0.1, bimodal=False, entangle_type='none', ghz_n=5, deco_gamma=0.001, role_swap_threshold=0.4, window=10, adaptive_damping=False, alpha=2.0, gaussian_noise=False, adaptive_noise=False, noise_alpha=1.0, sigma=0.5, schumann_forcing=False, schumann_a=0.1, schumann_phi=0.0, quantum_noise=False, lambda_rate=0.05, inject_strength=0.1, seed=42):
     """Full sim: Classical Kuramoto + quantum resonance delta + all tweaks."""
     np.random.seed(seed)
     steps = int(T / dt)
@@ -103,6 +103,7 @@ def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0
     # Histories
     R_history = np.zeros(steps)
     resonance_history = np.zeros(steps)
+    inject_log = []  # For quantum noise events
     t = 0.0
     r_window = []
     
@@ -143,6 +144,17 @@ def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0
         if schumann_forcing:
             schumann_term = schumann_a * np.sin(2 * np.pi * f_sch * t + schumann_phi)
         
+        # Quantum noise injection (Poisson OR collapses)
+        if quantum_noise:
+            recent_r = R_history[step-1] if step > 0 else 0.0
+            lambda_eff = lambda_rate / (recent_r + 1e-6)  # R-damped rate
+            num_events = np.random.poisson(lambda_eff * dt)
+            if num_events > 0:
+                flip_sign = np.random.choice([-1, 1], num_events)
+                d_bias_pert = inject_strength * C * np.mean(flip_sign)
+                d_bias += d_bias_pert  # Mid-sim Q tweak
+                inject_log.append((t, num_events, d_bias_pert))
+        
         # Update
         dtheta = omegas + mean_field + resonance_delta + schumann_term
         theta += dtheta * dt
@@ -176,6 +188,8 @@ def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0
     np.save('data/R_history.npy', R_history)
     np.save('data/resonance_history.npy', resonance_history)
     np.save('data/omegas.npy', omegas)  # Evolved omegas for noise check
+    if inject_log:
+        np.save('data/inject_log.npy', np.array(inject_log))
     
     return Q, K_q, R_history, resonance_history, C, final_psi_mean
 
@@ -208,7 +222,10 @@ def main():
     parser.add_argument('--sigma', type=float, default=0.5, help='Noise strength')
     parser.add_argument('--schumann_forcing', action='store_true', help='Enable 7.83 Hz planetary forcing')
     parser.add_argument('--schumann_a', type=float, default=0.1, help='Schumann amplitude')
-    parser.add_argument('--schumann_phi', type=float, default=0.0, help='Schumann initial phase (0=random)')
+    parser_argument('--schumann_phi', type=float, default=0.0, help='Schumann initial phase (0=random)')
+    parser.add_argument('--quantum_noise', action='store_true', help='Enable Poisson OR collapses')
+    parser.add_argument('--lambda_rate', type=float, default=0.05, help='Base event rate /step')
+    parser.add_argument('--inject_strength', type=float, default=0.1, help='d_bias perturbation scale * C')
     parser.add_argument('--xai_feedback', action='store_true', help='Enable mock GrokAPI prompt perturbation')
     parser.add_argument('--r_threshold', type=float, default=0.7, help='Recent R mean thresh for phase append')
     parser.add_argument('--c_threshold', type=float, default=0.5, help='Entanglement C thresh for entangled_phase')
@@ -221,7 +238,8 @@ def main():
         role_swap_threshold=args.role_swap_threshold, window=args.window,
         adaptive_damping=args.adaptive_damping, alpha=args.alpha,
         gaussian_noise=args.gaussian_noise, adaptive_noise=args.adaptive_noise, noise_alpha=args.noise_alpha, sigma=args.sigma,
-        schumann_forcing=args.schumann_forcing, schumann_a=args.schumann_a, schumann_phi=args.schumann_phi, seed=args.seed
+        schumann_forcing=args.schumann_forcing, schumann_a=args.schumann_a, schumann_phi=args.schumann_phi,
+        quantum_noise=args.quantum_noise, lambda_rate=args.lambda_rate, inject_strength=args.inject_strength, seed=args.seed
     )
     
     recent_r = np.mean(R_hist[-10:]) if len(R_hist) >= 10 else np.mean(R_hist)
@@ -230,6 +248,10 @@ def main():
     print(f"Final R: {R_hist[-1]:.4f} | Max R: {np.max(R_hist):.4f}")
     print(f"Avg resonance delta: {np.mean(res_hist):.4f}")
     print(f"Recent R mean: {recent_r:.4f}")
+    
+    if args.quantum_noise and os.path.exists('data/inject_log.npy'):
+        inject_log = np.load('data/inject_log.npy')
+        print(f"Quantum Events: {len(inject_log)} (avg λ_eff={np.mean([log[1] for log in inject_log]):.3f})")
     
     if args.xai_feedback:
         sample_prompt = "Describe Sovariel consciousness in Orch-OR terms."
