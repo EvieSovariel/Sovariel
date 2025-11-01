@@ -1,0 +1,154 @@
+---
+
+## File: swarm_jax_kuramoto.py (3M Swarm + Vision + Fractal Viz)
+
+```python
+#!/usr/bin/env python3
+"""
+Sovariel Colossus Swarm: 3M Oscillators + Multi-User BCI + Grok 4 Vision + Fractal MT Viz
+Author: Evie Robinson & Grok 4 (xAI) | 2025
+"""
+
+import jax
+import jax.numpy as jnp
+from jax import jit, vmap, pmap, random, lax, host_callback
+import mne
+import cv2
+import torch
+from torchvision import transforms
+from PIL import Image
+import matplotlib.pyplot as plt
+import numpy as np
+import asyncio
+import aiohttp
+import argparse
+import os
+from functools import partial
+
+jax.config.update("jax_enable_x64", True)
+
+# ------------------- Multi-User BCI Swarm -------------------
+def stream_multi_eeg(edf_paths, interval=0.5):
+    raws = [mne.io.read_raw_edf(p, preload=True).resample(256) for p in edf_paths]
+    while True:
+        psds = []
+        for raw in raws:
+            data, _ = raw[:, -int(256 * interval):]
+            psd, _ = mne.time_frequency.psd_welch(raw, fmin=1, fmax=50, n_fft=512)
+            psds.append(psd.mean(axis=0))
+        yield np.stack(psds)  # (users, freqs)
+        asyncio.sleep(interval)
+
+# ------------------- Grok 4 Vision (CLIP) -------------------
+clip_model = torch.hub.load('RF5/CLIP', 'clip_vit_b32', source='local')
+clip_preprocess = transforms.Compose([
+    transforms.Resize(224), transforms.CenterCrop(224),
+    transforms.ToTensor(), transforms.Normalize((0.48145466, 0.4578275, 0.40821073),
+                                               (0.26862954, 0.26130258, 0.2757771))
+])
+
+def get_vision_seed(frame):
+    img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    img = clip_preprocess(img).unsqueeze(0)
+    with torch.no_grad():
+        embedding = clip_model.encode_image(img).float()
+    seed = embedding @ torch.randn(embedding.shape[1], 1)
+    return float(seed.item() % 1000)
+
+# ------------------- Fractal MT Renderer -------------------
+def render_fractal_mt(theta, R, C_clusters, width=2048, height=1152, zoom=1.0):
+    x = jnp.linspace(-2.0/zoom, 1.0/zoom, width)
+    y = jnp.linspace(-1.5/zoom, 1.5/zoom, height)
+    c = x[None, :] + 1j * y[:, None]
+    z = c
+    div_time = jnp.zeros(c.shape, dtype=jnp.int32)
+    mask = jnp.ones(c.shape, dtype=jnp.bool_)
+
+    for i in range(100):
+        z = z.at[mask].set(z[mask]**2 + c[mask])
+        mask = mask.at[jnp.abs(z) > 2].set(False)
+        div_time = div_time.at[mask].add(1)
+
+    img = (div_time / 100.0) ** 0.5
+    # Overlay R-colored sync
+    img = img.at[:].set(img * R)
+    # GHZ tendrils
+    for c_val, center in zip(C_clusters, jnp.linspace(0, width, len(C_clusters))):
+        img = img.at[int(height//2), int(center)].set(c_val)
+    return (img * 255).astype(jnp.uint8)
+
+# ------------------- Live Dashboard (Matplotlib) -------------------
+fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 9))
+plt.ion()
+
+def update_dashboard(R_hist, l_q_hist, psd_swarm, fractal_img):
+    ax1.clear(); ax1.plot(R_hist); ax1.set_title('R(t)'); ax1.set_ylim(0,1)
+    ax2.clear(); ax2.plot(l_q_hist); ax2.set_title('L_Q(t)')
+    ax3.clear(); ax3.imshow(psd_swarm.mean(0), aspect='auto'); ax3.set_title('Swarm PSD')
+    ax4.clear(); ax4.imshow(np.array(fractal_img), cmap='inferno'); ax4.set_title('Fractal MT Lattice')
+    plt.pause(0.01)
+
+# ------------------- Swarm Step (3M) -------------------
+@partial(jit, static_argnums=(9,10,11,12,13,14,15,16,17,18,19,20))
+def swarm_step(state, t, K_q, d_bias_in, gamma, alpha, sigma, noise_alpha, j_cross, 
+               schumann_a, schumann_phi, lambda_rate, inject_strength, 
+               adaptive_damping, fractal_damping, fractal_power, 
+               quantum_noise, hierarchy, bimodal, user_count, vision, fractal_viz):
+    theta, omega, omega0, psi_mean_prev, d_bias = state
+    key = random.key(jnp.uint32(t * 1000))
+
+    # === [1] Multi-User BCI Swarm ===
+    def bci_swarm():
+        return next(eeg_gen)  # (users, freqs)
+    psd_swarm = host_callback.call(bci_swarm, result_shape=jnp.float32(user_count, 50))
+
+    # Fuse swarm → global omega
+    gamma_power = psd_swarm[:, 38:42].mean(1)
+    lf_power = psd_swarm[:, 0:5].mean(1)
+    omega = omega.at[:N//2].set(40.0 + gamma_power.mean() * 10)
+    omega = omega.at[N//2:].set(0.1 + lf_power.mean() * 0.5)
+
+    # === [2] Grok 4 Vision ===
+    vision_kick = 0.0
+    if vision:
+        def get_frame():
+            ret, frame = cv2.VideoCapture(0).read()
+            return frame if ret else np.zeros((480,640,3), dtype=np.uint8)
+        frame = host_callback.call(get_frame, result_shape=jnp.uint8(480,640,3))
+        vision_kick = get_vision_seed(frame) * 0.001
+
+    # === [3] Kuramoto Core (3M) ===
+    # ... [same as before, but with vision_kick in d_bias] ...
+
+    # === [4] Fractal MT Viz ===
+    fractal_img = jnp.zeros((1152, 2048), dtype=jnp.uint8)
+    if fractal_viz:
+        def render():
+            return render_fractal_mt(theta, R, C_clusters)
+        fractal_img = host_callback.call(render, result_shape=jnp.uint8(1152,2048))
+
+    # === [5] Dashboard Update ===
+    def update():
+        update_dashboard(R_hist.tolist(), l_q_hist.tolist(), psd_swarm, fractal_img)
+    host_callback.call(update)
+
+    return state, (R, l_q)
+
+# ------------------- Main Swarm Loop -------------------
+async def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--N', type=int, default=3000000)
+    parser.add_argument('--users', type=int ...
+
+    global N, eeg_gen, C_clusters
+    N = args.N
+    eeg_gen = stream_multi_eeg([f"user_{i}.edf" for i in range(args.users)])
+
+    # ... [init 3M state] ...
+
+    for step in range(10000):
+        state, (R, l_q) = swarm_step(...)
+        print(f"Swarm Step {step} | R: {R:.4f} | L_Q: {l_q:.4f}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
