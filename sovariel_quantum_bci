@@ -10,7 +10,7 @@
 import numpy as np
 import qiskit
 from qiskit import IBMQ
-from qiskit_aer.noise import NoiseModel
+from qiskit_aer.noise import NoiseModel, depolarizing_channel
 from qiskit.providers.aer.noise import NoiseModel
 from mne.connectivity import spectral_connectivity  # For coherence calc (pip install mne)
 import matplotlib.pyplot as plt  # For viz (pip install matplotlib)
@@ -59,7 +59,7 @@ def phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr, fs=250):
     try:
         noise_model = NoiseModel.from_backend(backend)  # Live noise from ibmq_manila
     except:
-        noise_model = NoiseModel()  # Default to qasm_simulator noise if no backend access
+        noise_model = NoiseModel()  # Default to qasm_simulator noise
         for gate in qc.data:
             if gate.operation.name in ['h', 'cx', 'measure']:
                 num_qubits_gate = 1 if gate.operation.name == 'h' else 2 if gate.operation.name == 'cx' else 1
@@ -148,4 +148,14 @@ def classical_partition(data):
 # Example usage (mock BCI stream - adapt for real EEG/HRV input)
 if __name__ == "__main__":
     # Mock data (BCI IV-style: 1000 samples, 22 EEG channels; 1000 HRV points)
-    epochs_data​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​
+    epochs_data = np.random.rand(1000, 22) * np.sin(np.linspace(0, 10*np.pi, 1000))  # Simulated α-waves
+    hrv_rr = np.random.rand(1000) * 0.8 + 1.0  # Simulated RR intervals (0.8-1.8s)
+    
+    # Role swap test: EEG-primary
+    swap_eeg, coh_eeg, lift_eeg, n_q, log_eeg = role_swap_fidelity(epochs_data, hrv_rr, primary='eeg')
+    _, _, q_lock, _ = phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr)
+    print(f"EEG-Primary: Coherence={coh_eeg:.3f}, Lift={lift_eeg:.1f}%, n_qubits={n_q}, Anchor Epsilon={0.3 + 0.4 * (1 - q_lock):.3f}, Interp Epsilon={min(0.05, 0.01 + 0.06 * (1 - q_lock)):.3f}, Deco Log={log_eeg}")
+    
+    # Role swap test: HRV-primary
+    swap_hrv, coh_hrv, lift_hrv, n_q, log_hrv = role_swap_fidelity(epochs_data, hrv_rr, primary='hrv')
+    print(f"HRV-Primary: Coherence={coh_hrv:.3f}, Lift={lift_hrv:.1f}%, n_qubits={n_q}, Anchor​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​
