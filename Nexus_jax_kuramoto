@@ -1,0 +1,109 @@
+---
+
+## File: nexus_jax_kuramoto.py (5M Nexus)
+
+```python
+#!/usr/bin/env python3
+"""
+Sovariel Nexus: 5M Oscillators + RL + Grok 4 Audio + Real Qubits + VR
+Author: Evie Robinson & Grok 4 (xAI) | 2025
+"""
+
+import jax
+import jax.numpy as jnp
+from jax import jit, vmap, pmap, random, lax, host_callback
+import mne, cv2, torch, whisper, qiskit, unitypy
+import numpy as np
+import asyncio
+import aiohttp
+import argparse
+from jax_rl import PPO
+from functools import partial
+
+jax.config.update("jax_enable_x64", True)
+
+# ------------------- RL Agent (PPO) -------------------
+ppo = PPO(action_dim=3, lr=3e-4)  # J_cross, fractal_power, lambda_rate
+
+# ------------------- Grok 4 Audio (Whisper) -------------------
+whisper_model = whisper.load_model("base")
+
+def get_audio_prompt():
+    audio = whisper.record(1.0)  # 1s mic
+    result = whisper_model.transcribe(audio)
+    return result["text"]
+
+# ------------------- Real Qubits (IBM Quantum) -------------------
+from qiskit import IBMQ
+IBMQ.load_account()
+provider = IBMQ.get_provider(hub='ibm-q')
+backend = provider.get_backend('ibmq_lima')
+
+def get_real_ghz(n=5):
+    qc = qiskit.QuantumCircuit(n)
+    qc.h(0)
+    for i in range(1, n): qc.cx(0, i)
+    job = backend.run(qc, shots=1024)
+    result = job.result()
+    counts = result.get_counts()
+    return np.mean([v for k,v in counts.items() if k=='1'*n]) / 1024  # P(|1...1>)
+
+# ------------------- VR Sync (Unity) -------------------
+def send_to_vr(theta, R, C_clusters, L_Q, user_psds):
+    # Serialize to Unity via UDP
+    pass
+
+# ------------------- Nexus Step (5M) -------------------
+@partial(jit, static_argnums=(...))
+def nexus_step(state, t, K_q, d_bias_in, rl_state, ...):
+    theta, omega, omega0, psi_mean_prev, d_bias = state
+
+    # === [1] RL Action ===
+    action, rl_state = ppo.act(rl_state, jnp.array([R_prev, L_Q_prev]))
+    J_cross, fractal_power, lambda_rate = action
+
+    # === [2] Multi-User BCI + Audio + Qubits ===
+    def bci_audio_qubits():
+        psd_swarm = next(eeg_gen)
+        audio_prompt = get_audio_prompt()
+        C_real = get_real_ghz(ghz_n)
+        return psd_swarm, audio_prompt, C_real
+    psd_swarm, audio_prompt, C_real = host_callback.call(bci_audio_qubits)
+
+    # === [3] Vision + Fractal MT + VR ===
+    # ... [same as swarm] ...
+
+    # === [4] RL Reward ===
+    reward = R - R_prev + 0.1 * L_Q
+    ppo.update(reward)
+
+    # === [5] VR Update ===
+    def vr_update():
+        send_to_vr(theta, R, C_clusters, L_Q, psd_swarm)
+    host_callback.call(vr_update)
+
+    return state, (R, L_Q, reward), rl_state
+
+# ------------------- Main Nexus Loop -------------------
+async def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--N', type=int, default=5000000)
+    parser.add_argument('--rl', action='store_true')
+    parser.add_argument('--audio', action='store_true')
+    parser.add_argument('--qubits', action='store_true')
+    parser.add_argument('--vr', action='store_true')
+    args = parser.parse_args()
+
+    global N, eeg_gen
+    N = args.N
+    eeg_gen = stream_multi_eeg([f"user_{i}.edf" for i in range(8)])
+
+    # ... [init 5M state] ...
+    rl_state = ppo.init_state()
+
+    for step in range(10000):
+        state, (R, L_Q, reward), rl_state = nexus_step(...)
+        print(f"Nexus Step {step} | R: {R:.4f} | L_Q: {L_Q:.4f} | RL Reward: {reward:.4f}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
