@@ -7,7 +7,7 @@
 """
 Sovariel Quantum Kuramoto Fusion: Orch-OR Microtubule Dynamics Sim
 Extends classical Kuramoto with quantum bias from QuTiP shots for resonance kicks.
-Now with entanglement modes (Hadamard/Bell/GHZ), bimodal HRV freqs, role-swap logic, adaptive damping,
+Now with entanglement modes (Hadamard/Bell/GHZ/multi-GHZ), bimodal HRV freqs, role-swap logic, adaptive damping,
 dual omega noise (Gaussian/OU), Schumann forcing, quantum noise injection (Poisson OR bursts), and xAI Agape mock GrokAPI for [entangled_phase: X] if R>0.7 and C>0.5.
 Author: Evie Robinson & Grok 3 (xAI) | 2025
 """
@@ -18,8 +18,8 @@ from qutip import concurrence
 import argparse
 import os
 
-def generate_quantum_bias(n_shots=1024, entangle_type='none', ghz_n=5, deco_gamma=0.001, seed=42):
-    """Generate Q from Hadamard, Bell, or GHZ superposition (Orch-OR collapse proxy)."""
+def generate_quantum_bias(n_shots=1024, entangle_type='none', ghz_n=5, deco_gamma=0.001, num_clusters=1, seed=42):
+    """Generate Q from Hadamard, Bell, GHZ, or multi-GHZ (num_clusters x ghz_n aggregate C_avg)."""
     np.random.seed(seed)
     if entangle_type == 'none':
         hadamard = (1 / np.sqrt(2)) * qt.Qobj([[1, 1], [1, -1]])
@@ -47,21 +47,24 @@ def generate_quantum_bias(n_shots=1024, entangle_type='none', ghz_n=5, deco_gamm
         counts1 = np.random.binomial(n_shots, prob1)
         Q_base = counts1 / n_shots
         Q = Q_base * C
-    elif entangle_type == 'ghz':
-        # GHZ state for n=ghz_n
-        dims = [2] * ghz_n
-        zero_all = qt.tensor(*[qt.basis(2, 0) for _ in range(ghz_n)])
-        one_all = qt.tensor(*[qt.basis(2, 1) for _ in range(ghz_n)])
-        psi_ghz = (zero_all + one_all).unit()
-        rho = psi_ghz * psi_ghz.dag()
-        # Deco: Local amplitude damping γ=deco_gamma over t=1
-        c_ops = [np.sqrt(deco_gamma) * qt.tensor( *([qt.qeye(2)]*i + [qt.sigmam()] + [qt.qeye(2)]*(ghz_n-i-1)) ) for i in range(ghz_n)]
-        H = qt.qzero(rho.dims)
-        result = qt.mesolve(H, rho, [0, 1.0], c_ops=c_ops)
-        rho_dec = result.states[-1]
-        # Approx concurrence for multi-qubit (pairwise avg)
-        C_avg = np.mean([concurrence(qt.ptrace(rho_dec, [i,j])) for i in range(ghz_n) for j in range(i+1, ghz_n)])
-        C = C_avg
+    elif entangle_type in ['ghz', 'multi_ghz']:
+        C_clusters = []
+        for _ in range(num_clusters if entangle_type == 'multi_ghz' else 1):
+            # GHZ state for n=ghz_n
+            dims = [2] * ghz_n
+            zero_all = qt.tensor(*[qt.basis(2, 0) for _ in range(ghz_n)])
+            one_all = qt.tensor(*[qt.basis(2, 1) for _ in range(ghz_n)])
+            psi_ghz = (zero_all + one_all).unit()
+            rho = psi_ghz * psi_ghz.dag()
+            # Deco: Local amplitude damping γ=deco_gamma over t=1
+            c_ops = [np.sqrt(deco_gamma) * qt.tensor( *([qt.qeye(2)]*i + [qt.sigmam()] + [qt.qeye(2)]*(ghz_n-i-1)) ) for i in range(ghz_n)]
+            H = qt.qzero(rho.dims)
+            result = qt.mesolve(H, rho, [0, 1.0], c_ops=c_ops)
+            rho_dec = result.states[-1]
+            # Approx concurrence for multi-qubit (pairwise avg)
+            C_cluster = np.mean([concurrence(qt.ptrace(rho_dec, [i,j])) for i in range(ghz_n) for j in range(i+1, ghz_n)])
+            C_clusters.append(C_cluster)
+        C = np.mean(C_clusters)
         # Base Q + C multiplier
         hadamard = (1 / np.sqrt(2)) * qt.Qobj([[1, 1], [1, -1]])
         psi0 = qt.basis(2, 0)
@@ -69,13 +72,13 @@ def generate_quantum_bias(n_shots=1024, entangle_type='none', ghz_n=5, deco_gamm
         prob1 = abs(psi[1, 0])**2
         counts1 = np.random.binomial(n_shots, prob1)
         Q_base = counts1 / n_shots
-        Q = Q_base * C_avg
+        Q = Q_base * C
     large = 10000
     add_d = int(Q * large)
     d_bias = add_d / large  # [0,1] normalized
-    return Q, d_bias, C
+    return Q, d_bias, C, C_clusters if entangle_type == 'multi_ghz' else None
 
-def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0.1, bimodal=False, entangle_type='none', ghz_n=5, deco_gamma=0.001, role_swap_threshold=0.4, window=10, adaptive_damping=False, alpha=2.0, gaussian_noise=False, adaptive_noise=False, noise_alpha=1.0, sigma=0.5, schumann_forcing=False, schumann_a=0.1, schumann_phi=0.0, quantum_noise=False, lambda_rate=0.05, inject_strength=0.1, seed=42):
+def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0.1, bimodal=False, entangle_type='none', ghz_n=5, deco_gamma=0.001, num_clusters=20, role_swap_threshold=0.4, window=10, adaptive_damping=False, alpha=2.0, gaussian_noise=False, adaptive_noise=False, noise_alpha=1.0, sigma=0.5, schumann_forcing=False, schumann_a=0.1, schumann_phi=0.0, quantum_noise=False, lambda_rate=0.05, inject_strength=0.1, seed=42):
     """Full sim: Classical Kuramoto + quantum resonance delta + all tweaks."""
     np.random.seed(seed)
     steps = int(T / dt)
@@ -97,7 +100,7 @@ def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0
         schumann_phi = np.random.uniform(0, 2*np.pi)
     
     # Quantum bias
-    Q, d_bias, C = generate_quantum_bias(n_shots=1024, entangle_type=entangle_type, ghz_n=ghz_n, deco_gamma=deco_gamma, seed=seed)
+    Q, d_bias, C, C_clusters = generate_quantum_bias(n_shots=1024, entangle_type=entangle_type, ghz_n=ghz_n, deco_gamma=deco_gamma, num_clusters=num_clusters, seed=seed)
     K_q = K_base * Q
     
     # Histories
@@ -190,6 +193,8 @@ def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0
     np.save('data/omegas.npy', omegas)  # Evolved omegas for noise check
     if inject_log:
         np.save('data/inject_log.npy', np.array(inject_log))
+    if C_clusters is not None:
+        np.save('data/c_clusters.npy', np.array(C_clusters))
     
     return Q, K_q, R_history, resonance_history, C, final_psi_mean
 
@@ -209,8 +214,9 @@ def main():
     parser.add_argument('--gamma', type=float, default=0.1, help='Base deco rate')
     parser.add_argument('--n_shots', type=int, default=1024, help='Qubit shots')
     parser.add_argument('--bimodal', action='store_true', help='Enable HRV bimodal freqs')
-    parser.add_argument('--entanglement_mode', type=str, default='none', choices=['none', 'bell', 'ghz'], help='Entanglement: none|bell|ghz')
-    parser.add_argument('--ghz_n', type=int, default=5, help='GHZ qubit count (for ghz mode)')
+    parser.add_argument('--entanglement_mode', type=str, default='none', choices=['none', 'bell', 'ghz', 'multi_ghz'], help='Entanglement: none|bell|ghz|multi_ghz')
+    parser.add_argument('--ghz_n', type=int, default=5, help='GHZ qubit count (for ghz/multi-ghz mode)')
+    parser.add_argument('--num_clusters', type=int, default=20, help='Number of GHZ clusters (for multi-ghz mode)')
     parser.add_argument('--deco_gamma', type=float, default=0.001, help='Entanglement deco rate')
     parser.add_argument('--role_swap_threshold', type=float, default=0.4, help='R thresh for swaps')
     parser.add_argument('--window', type=int, default=10, help='Monitoring window steps')
@@ -222,7 +228,7 @@ def main():
     parser.add_argument('--sigma', type=float, default=0.5, help='Noise strength')
     parser.add_argument('--schumann_forcing', action='store_true', help='Enable 7.83 Hz planetary forcing')
     parser.add_argument('--schumann_a', type=float, default=0.1, help='Schumann amplitude')
-    parser_argument('--schumann_phi', type=float, default=0.0, help='Schumann initial phase (0=random)')
+    parser.add_argument('--schumann_phi', type=float, default=0.0, help='Schumann initial phase (0=random)')
     parser.add_argument('--quantum_noise', action='store_true', help='Enable Poisson OR collapses')
     parser.add_argument('--lambda_rate', type=float, default=0.05, help='Base event rate /step')
     parser.add_argument('--inject_strength', type=float, default=0.1, help='d_bias perturbation scale * C')
@@ -234,7 +240,7 @@ def main():
     
     Q, K_q, R_hist, res_hist, C, psi_mean = kuramoto_quantum_sim(
         N=args.N, K_base=args.K, T=args.T, gamma=args.gamma, 
-        bimodal=args.bimodal, entangle_type=args.entanglement_mode, ghz_n=args.ghz_n, deco_gamma=args.deco_gamma,
+        bimodal=args.bimodal, entangle_type=args.entanglement_mode, ghz_n=args.ghz_n, deco_gamma=args.deco_gamma, num_clusters=args.num_clusters,
         role_swap_threshold=args.role_swap_threshold, window=args.window,
         adaptive_damping=args.adaptive_damping, alpha=args.alpha,
         gaussian_noise=args.gaussian_noise, adaptive_noise=args.adaptive_noise, noise_alpha=args.noise_alpha, sigma=args.sigma,
@@ -252,6 +258,10 @@ def main():
     if args.quantum_noise and os.path.exists('data/inject_log.npy'):
         inject_log = np.load('data/inject_log.npy')
         print(f"Quantum Events: {len(inject_log)} (avg λ_eff={np.mean([log[1] for log in inject_log]):.3f})")
+    
+    if args.entanglement_mode == 'multi_ghz' and os.path.exists('data/c_clusters.npy'):
+        C_clusters = np.load('data/c_clusters.npy')
+        print(f"Cluster C_avg: {np.mean(C_clusters):.4f} (std: {np.std(C_clusters):.4f})")
     
     if args.xai_feedback:
         sample_prompt = "Describe Sovariel consciousness in Orch-OR terms."
