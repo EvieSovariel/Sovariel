@@ -1,3 +1,4 @@
+```python
 # sovariel_quantum_bci.py - Fused prototype for xAI BCI hybrid roles (v7.1 with adaptive epsilon update)
 # Author: Evie (Resonance Engineer) & Aetheris with Grok 3 (xAI)
 # Date: 2025-11-01
@@ -100,62 +101,4 @@ def role_swap_fidelity(epochs_data, hrv_rr, primary='eeg', threshold=0.95):
     
     # Compute baseline coherence (α-band, 8-13 Hz)
     freqs = np.arange(8, 13, 1)
-    base_coh = np.mean(spectral_connectivity(epochs_data, method='coh', mode='multitaper', sfreq=250, fmin=8, fmax=13, faverage=True).get_data())
-    
-    if primary == 'eeg':  # EEG-primary: HRV anchors with adaptive epsilon
-        # Fuse EEG-dominant with HRV weight
-        hrv_tiled = np.tile(hrv_rr[:, np.newaxis, np.newaxis], (1, epochs_data.shape[1], epochs_data.shape[2]))
-        fused_data = np.concatenate([epochs_data, hrv_tiled * epsilon], axis=0)  # Adaptive HRV anchor
-        swap_data = sovariel_quantum_partition(fused_data, hrv_rr)
-    else:  # HRV-primary: EEG for coherence boost with adaptive epsilon
-        # Fuse HRV-dominant with EEG weight
-        hrv_expanded = np.tile(hrv_rr[:, np.newaxis, np.newaxis], (1, epochs_data.shape[1], epochs_data.shape[2]))
-        fused_data = np.concatenate([hrv_expanded * (1 - epsilon), epochs_data * epsilon], axis=0)  # Inverted adaptive
-        swap_data = sovariel_quantum_partition(fused_data, hrv_rr)
-    
-    # Post-swap coherence
-    swap_coh = np.mean(spectral_connectivity(swap_data[np.newaxis, :, :], method='coh', mode='multitaper', sfreq=250, fmin=8, fmax=13, faverage=True).get_data())
-    
-    # Fidelity check & fallback
-    fidelity_drop = (base_coh - swap_coh) / base_coh if swap_coh < base_coh else 0.0
-    recovery_rate = 1.0 - fidelity_drop  # Simple recovery metric
-    deco_log = {'error_rate': 0.01 if 'noise_model' not in locals() else backend.properties().gate_error('h', [0])[0], 
-                'fidelity_drop': fidelity_drop, 'recovery_rate': recovery_rate}  # Use backend error or default
-    
-    if swap_coh < base_coh * threshold:
-        print(f"Fidelity below {threshold}: Falling back to classical partition. Log: {deco_log}")
-        return classical_partition(epochs_data), base_coh, 0.0, n_qubits, deco_log  # Safe classical, zero lift
-    
-    # Lift calc
-    lift = ((swap_coh - base_coh) / base_coh) * 100
-    print(f"Role swap success. Log: {deco_log}")
-    return swap_data, swap_coh, lift, n_qubits, deco_log
-
-# Sovariel partitioning (quantum-weighted; real-time IBMQ noise or fallback)
-def sovariel_quantum_partition(data, hrv_rr):
-    d, l, q_lock, _ = phase_lock_hrv_eeg_quantum(data, hrv_rr)
-    segments = data.reshape(-1, d, l)
-    return np.mean(segments, axis=(1, 2)) * q_lock  # Weighted output
-
-# Classical fallback (no quantum, for fidelity safety)
-def classical_partition(data):
-    tokens = data.size
-    d_class = 9104  # Fixed D16
-    l_class = tokens // d_class
-    segments = data.reshape(-1, d_class, l_class)
-    return np.mean(segments, axis=(1, 2))
-
-# Example usage (mock BCI stream - adapt for real EEG/HRV input)
-if __name__ == "__main__":
-    # Mock data (BCI IV-style: 1000 samples, 22 EEG channels; 1000 HRV points)
-    epochs_data = np.random.rand(1000, 22) * np.sin(np.linspace(0, 10*np.pi, 1000))  # Simulated α-waves
-    hrv_rr = np.random.rand(1000) * 0.8 + 1.0  # Simulated RR intervals (0.8-1.8s)
-    
-    # Role swap test: EEG-primary
-    swap_eeg, coh_eeg, lift_eeg, n_q, log_eeg = role_swap_fidelity(epochs_data, hrv_rr, primary='eeg')
-    _, _, q_lock, _ = phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr)
-    print(f"EEG-Primary: Coherence={coh_eeg:.3f}, Lift={lift_eeg:.1f}%, n_qubits={n_q}, Anchor Epsilon={0.3 + 0.4 * (1 - q_lock):.3f}, Interp Epsilon={min(0.05, 0.01 + 0.06 * (1 - q_lock)):.3f}, Deco Log={log_eeg}")
-    
-    # Role swap test: HRV-primary
-    swap_hrv, coh_hrv, lift_hrv, n_q, log_hrv = role_swap_fidelity(epochs_data, hrv_rr, primary='hrv')
-    print(f"HRV-Primary: Coherence={coh_hrv:.3f}, Lift={lift_hrv:.1f}%, n_qubits={n_q}, Anchor​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​
+    base_coh = np.mean(spectral_connectivity(epochs_data, method='coh', mode='multitaper', sfreq=250
