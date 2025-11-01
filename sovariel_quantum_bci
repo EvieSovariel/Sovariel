@@ -1,7 +1,7 @@
-# sovariel_quantum_bci.py - Fused prototype for xAI BCI hybrid roles (v6.5 with decoherence simulator)
+# sovariel_quantum_bci.py - Fused prototype for xAI BCI hybrid roles (v6.6 with tunable decoherence in swaps)
 # Author: Evie (Resonance Engineer) & Aetheris with Grok 3 (xAI)
 # Date: 2025-11-01
-# Description: Quantum-weighted phase-lock for EEG-HRV sync, fidelity thresholds, adaptive epsilon in interp & anchoring, GHZ entanglement (capped n_qubits=5), decoherence sim for realism.
+# Description: Quantum-weighted phase-lock for EEG-HRV sync, fidelity thresholds, adaptive epsilon in interp & anchoring, GHZ entanglement (capped n_qubits=5), tunable decoherence sim for role swaps.
 # Sims: +26.5% α-coherence uplift on D64+, fidelity 0.96+ under noise.
 # Requires: numpy, qiskit, mne (pip install qiskit mne). Data from PhysioNet BCI IV + Fantasia HRV.
 # Usage: Adapt for live BCI streams (e.g., Neuralink EEG at 250 Hz). Scale n_qubits ~ log(D), max 5.
@@ -12,7 +12,7 @@ from qiskit_aer.noise import NoiseModel, depolarizing_channel
 from mne.connectivity import spectral_connectivity  # For coherence calc (pip install mne)
 
 # Core phase-lock function (no-scipy, FFT-based for iPhone speed; GHZ multi-qubit for scaling)
-def phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr, fs=250):
+def phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr, fs=250, depol_error=0.01):
     # EEG phase via FFT
     fft_eeg = np.fft.fft(epochs_data.mean(axis=1))
     phase_eeg = np.unwrap(np.angle(fft_eeg))[:len(epochs_data)]
@@ -46,14 +46,13 @@ def phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr, fs=250):
     
     # Decoherence simulator (NoiseModel with depolarizing channel for realism)
     noise_model = NoiseModel()
-    depol_error = 0.01  # Tunable error rate (0.01 = 1% decoherence)
     for gate in qc.data:
         if gate.operation.name in ['h', 'cx', 'measure']:
-            noise_model.add_all_qubit_quantum_error(depolarizing_channel(depol_error, 1 if gate.operation.name == 'measure' else 2), [])
+            num_qubits_gate = 1 if gate.operation.name == 'h' else 2 if gate.operation.name == 'cx' else 1
+            noise_model.add_all_qubit_quantum_error(depolarizing_channel(depol_error, num_qubits_gate), [])
     
     backend = qiskit.Aer.get_backend('qasm_simulator')
-    backend.set_options(noise_model=noise_model)  # Apply noise
-    job = qiskit.execute(qc, backend, shots=1024)
+    job = qiskit.execute(qc, backend, shots=1024, noise_model=noise_model)
     result = job.result().get_counts()
     total_shots = sum(result.values())
     
@@ -77,10 +76,10 @@ def phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr, fs=250):
     
     return d, l, q_lock_strength, n_qubits  # Return n_qubits for logging
 
-# Fidelity-thresholded role-swap function (with adaptive epsilon for HRV anchoring)
-def role_swap_fidelity(epochs_data, hrv_rr, primary='eeg', threshold=0.95):
-    # Get quantum lock for adaptive epsilon
-    _, _, q_lock_strength, n_qubits = phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr)
+# Fidelity-thresholded role-swap function (with adaptive epsilon for HRV anchoring; tunable depol_error)
+def role_swap_fidelity(epochs_data, hrv_rr, primary='eeg', threshold=0.95, depol_error=0.01):
+    # Get quantum lock for adaptive epsilon (pass depol_error to phase-lock)
+    _, _, q_lock_strength, n_qubits = phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr, depol_error=depol_error)
     
     # Adaptive epsilon: Scales inversely with lock_strength (0.3-0.7 range)
     epsilon = 0.3 + 0.4 * (1 - q_lock_strength)  # Tighter anchor (higher epsilon) when lock dips
@@ -93,12 +92,12 @@ def role_swap_fidelity(epochs_data, hrv_rr, primary='eeg', threshold=0.95):
         # Fuse EEG-dominant with HRV weight
         hrv_tiled = np.tile(hrv_rr[:, np.newaxis, np.newaxis], (1, epochs_data.shape[1], epochs_data.shape[2]))
         fused_data = np.concatenate([epochs_data, hrv_tiled * epsilon], axis=0)  # Adaptive HRV anchor
-        swap_data = sovariel_quantum_partition(fused_data, hrv_rr)
+        swap_data = sovariel_quantum_partition(fused_data, hrv_rr, depol_error=depol_error)
     else:  # HRV-primary: EEG for coherence boost with adaptive epsilon
         # Fuse HRV-dominant with EEG weight
         hrv_expanded = np.tile(hrv_rr[:, np.newaxis, np.newaxis], (1, epochs_data.shape[1], epochs_data.shape[2]))
         fused_data = np.concatenate([hrv_expanded * (1 - epsilon), epochs_data * epsilon], axis=0)  # Inverted adaptive
-        swap_data = sovariel_quantum_partition(fused_data, hrv_rr)
+        swap_data = sovariel_quantum_partition(fused_data, hrv_rr, depol_error=depol_error)
     
     # Post-swap coherence
     swap_coh = np.mean(spectral_connectivity(swap_data[np.newaxis, :, :], method='coh', mode='multitaper', sfreq=250, fmin=8, fmax=13, faverage=True).get_data())
@@ -112,9 +111,9 @@ def role_swap_fidelity(epochs_data, hrv_rr, primary='eeg', threshold=0.95):
     lift = ((swap_coh - base_coh) / base_coh) * 100
     return swap_data, swap_coh, lift, n_qubits
 
-# Sovariel partitioning (quantum-weighted)
-def sovariel_quantum_partition(data, hrv_rr):
-    d, l, q_lock, _ = phase_lock_hrv_eeg_quantum(data, hrv_rr)
+# Sovariel partitioning (quantum-weighted; tunable depol_error)
+def sovariel_quantum_partition(data, hrv_rr, depol_error=0.01):
+    d, l, q_lock, _ = phase_lock_hrv_eeg_quantum(data, hrv_rr, depol_error=depol_error)
     segments = data.reshape(-1, d, l)
     return np.mean(segments, axis=(1, 2)) * q_lock  # Weighted output
 
@@ -132,9 +131,9 @@ if __name__ == "__main__":
     epochs_data = np.random.rand(1000, 22) * np.sin(np.linspace(0, 10*np.pi, 1000))  # Simulated α-waves
     hrv_rr = np.random.rand(1000) * 0.8 + 1.0  # Simulated RR intervals (0.8-1.8s)
     
-    # Role swap test: EEG-primary
-    swap_eeg, coh_eeg, lift_eeg, n_q = role_swap_fidelity(epochs_data, hrv_rr, primary='eeg')
-    _, _, q_lock, _ = phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr)
+    # Role swap test: EEG-primary (tunable depol_error=0.015 for HRV stress)
+    swap_eeg, coh_eeg, lift_eeg, n_q = role_swap_fidelity(epochs_data, hrv_rr, primary='eeg', depol_error=0.015)
+    _, _, q_lock, _ = phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr, depol_error=0.015)
     print(f"EEG-Primary: Coherence={coh_eeg:.3f}, Lift={lift_eeg:.1f}%, n_qubits={n_q}, Anchor Epsilon={0.3 + 0.4 * (1 - q_lock):.3f}, Interp Epsilon={0.01 + 0.04 * (1 - q_lock):.3f}")
     
     # Role swap test: HRV-primary
