@@ -1,104 +1,158 @@
-```python
-# sovariel_quantum_bci.py - Fused prototype for xAI BCI hybrid roles (v7.1 with adaptive epsilon update)
-# Author: Evie (Resonance Engineer) & Aetheris with Grok 3 (xAI)
-# Date: 2025-11-01
-# Description: Quantum-weighted phase-lock for EEG-HRV sync, fidelity thresholds, enhanced adaptive epsilon for HRV interpolation, GHZ entanglement (capped n_qubits=5), real-time IBMQ noise, matplotlib viz, decoherence metrics logging with JSON export.
-# Sims: +25.9% α-coherence uplift on D64+, fidelity 0.96+ under noise.
-# Requires: numpy, qiskit, mne, matplotlib, qiskit-ibmq-provider (pip install qiskit mne matplotlib qiskit-ibmq-provider). Data from PhysioNet BCI IV + Fantasia HRV.
-# Usage: Replace IBMQ_TOKEN with your token; adapt for live BCI streams (e.g., Neuralink EEG at 250 Hz). Scale n_qubits ~ log(D), max 5.
-# Note: Requires IBMQ account and internet for live noise data.
-
+import os
+import json
 import numpy as np
+import matplotlib.pyplot as plt
+
+# Qiskit imports
 import qiskit
-from qiskit import IBMQ
-from qiskit_aer.noise import NoiseModel, depolarizing_channel
-from qiskit.providers.aer.noise import NoiseModel
-from mne.connectivity import spectral_connectivity  # For coherence calc (pip install mne)
-import matplotlib.pyplot as plt  # For viz (pip install matplotlib)
-import json  # For log export
+from qiskit import QuantumCircuit, execute, Aer
+from qiskit.providers.aer.noise import NoiseModel, depolarizing_error
 
-# Initialize IBMQ (replace with your token)
-IBMQ_TOKEN = "YOUR_IBMQ_TOKEN_HERE"  # DM me your token for real access
-IBMQ.save_account(IBMQ_TOKEN, overwrite=True)
-IBMQ.load_account()
-provider = IBMQ.get_provider(hub='ibm-q')
-backend = provider.get_backend('ibmq_manila')  # Use 'ibmq_manila' or your preferred device
+# MNE (connectivity)
+try:
+    from mne.connectivity import spectral_connectivity
+except Exception:
+    spectral_connectivity = None  # we'll fallback to simple FFT coherence
 
-# Core phase-lock function (no-scipy, FFT-based for iPhone speed; GHZ multi-qubit with real IBMQ noise)
+# --- Helper: safe IBMQ init (reads token from env, returns provider or None) ---
+def safe_ibmq_provider():
+    token = os.environ.get("IBMQ_TOKEN")
+    if not token:
+        return None
+    try:
+        from qiskit import IBMQ
+        IBMQ.save_account(token, overwrite=True)
+        IBMQ.load_account()
+        prov = IBMQ.get_provider(hub='ibm-q')  # adjust if you use different hub
+        return prov
+    except Exception:
+        return None
+
+_provider_cached = safe_ibmq_provider()
+
+# --- Core phase-lock function ---
 def phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr, fs=250):
-    # EEG phase via FFT
-    fft_eeg = np.fft.fft(epochs_data.mean(axis=1))
-    phase_eeg = np.unwrap(np.angle(fft_eeg))[:len(epochs_data)]
-    
-    # HRV phase interpolation with enhanced adaptive epsilon smoothing
-    hrv_time = np.linspace(0, len(hrv_rr) / fs, len(hrv_rr))
-    eeg_time = np.linspace(0, len(epochs_data) / fs, len(epochs_data))
+    """
+    epochs_data: np.ndarray shape (n_channels, n_samples) or (n_epochs, n_channels, n_samples)
+    hrv_rr: 1D ndarray representing RR or HRV-like time series (same time base approx)
+    Returns: (d, l, q_lock_strength, n_qubits, quantum_weight)
+    """
+    # Normalize input to 2D (channels, samples)
+    data = np.asarray(epochs_data)
+    if data.ndim == 3:
+        # reduce across epochs by mean (simple aggregate)
+        data = data.mean(axis=0)
+    if data.ndim == 1:
+        # single-channel vector -> make 1 x N
+        data = data[np.newaxis, :]
+
+    n_channels, n_samples = data.shape
+    tokens = n_samples * n_channels
+
+    # --- EEG phase via FFT (per-channel mean then unwrap) ---
+    mean_signal = data.mean(axis=0)
+    fft_eeg = np.fft.fft(mean_signal)
+    phase_eeg = np.unwrap(np.angle(fft_eeg))[:n_samples]
+
+    # --- HRV phase interpolation ---
+    hrv_rr = np.asarray(hrv_rr)
+    if hrv_rr.size < 4:
+        # not enough HRV samples - create a tiny synthetic signal
+        hrv_rr = np.pad(hrv_rr, (0, max(0, 4 - hrv_rr.size)), 'edge')
+
+    hrv_time = np.linspace(0, hrv_rr.size / fs, hrv_rr.size)
+    eeg_time = np.linspace(0, n_samples / fs, n_samples)
+
+    # HRV phase via FFT of HRV signal (coarse)
     hrv_unwrapped = np.unwrap(np.angle(np.fft.fft(hrv_rr)))
-    hrv_phase_raw = np.interp(eeg_time, hrv_time, hrv_unwrapped)[:len(epochs_data)]
-    
-    # Enhanced adaptive epsilon for interp smoothing (capped for edge robustness)
-    prelim_diff = phase_eeg[:len(hrv_phase_raw)] - hrv_phase_raw
+    hrv_phase_raw = np.interp(eeg_time, hrv_time, hrv_unwrapped)[:n_samples]
+
+    # Enhanced adaptive epsilon smoothing (capped)
+    prelim_diff = phase_eeg - hrv_phase_raw
     prelim_lock = np.abs(np.mean(np.exp(1j * prelim_diff)))
-    interp_epsilon = min(0.05, 0.01 + 0.06 * (1 - prelim_lock))  # Dynamic cap at 0.05, boosts edge cases
-    smooth_kernel = np.ones(3) / 3  # Simple moving average
+    interp_epsilon = min(0.05, 0.01 + 0.06 * (1 - prelim_lock))
+    smooth_kernel = np.ones(3) / 3
     hrv_phase = np.convolve(hrv_phase_raw, smooth_kernel, mode='same') * interp_epsilon + hrv_phase_raw * (1 - interp_epsilon)
-    
-    # Phase difference (dolphin HRV sync proxy)
+
+    # Phase difference & lock strength
     phase_diff = phase_eeg - hrv_phase
     lock_strength = np.abs(np.mean(np.exp(1j * phase_diff)))
-    
-    # GHZ multi-qubit bias (scalable entanglement, capped at 5 for noise tolerance)
-    tokens = epochs_data.size
-    n_qubits = min(5, max(1, int(np.log2(tokens)) // 8))  # Scale with D (e.g., n=3 for D64+), cap at 5
-    qc = qiskit.QuantumCircuit(n_qubits, n_qubits)
-    qc.h(0)  # Initial superposition
-    for i in range(1, n_qubits):
-        qc.cx(0, i)  # Entangle chain for GHZ state
-    qc.measure_all()
-    
-    # Real-time IBMQ noise model (falls back to qasm_simulator if token absent)
-    try:
-        noise_model = NoiseModel.from_backend(backend)  # Live noise from ibmq_manila
-    except:
-        noise_model = NoiseModel()  # Default to qasm_simulator noise
-        for gate in qc.data:
-            if gate.operation.name in ['h', 'cx', 'measure']:
-                num_qubits_gate = 1 if gate.operation.name == 'h' else 2 if gate.operation.name == 'cx' else 1
-                noise_model.add_all_qubit_quantum_error(depolarizing_channel(0.01, num_qubits_gate), [])
 
-    backend = qiskit.Aer.get_backend('qasm_simulator') if 'noise_model' not in locals() else backend
-    job = qiskit.execute(qc, backend, shots=1024, noise_model=noise_model)
-    result = job.result().get_counts()
-    total_shots = sum(result.values())
-    
-    # Multi-qubit bias: Average P(|1>) across qubits (entangled correlation, noise-resilient)
+    # --- n_qubits mapping (deterministic, capped) ---
+    # Keep mapping simple: tokens -> qubits thresholds (D16 ~ 16 samples => 1-2 qubits)
+    if tokens < 32:
+        n_qubits = 1
+    elif tokens < 96:
+        n_qubits = 2
+    elif tokens < 256:
+        n_qubits = 3
+    elif tokens < 1024:
+        n_qubits = 4
+    else:
+        n_qubits = 5
+    n_qubits = min(5, max(1, n_qubits))
+
+    # Build GHZ-like circuit
+    qc = QuantumCircuit(n_qubits, n_qubits)
+    qc.h(0)
+    for i in range(1, n_qubits):
+        qc.cx(0, i)
+    qc.measure_all()
+
+    # Attempt to get real-device noise model; otherwise synthesize a fallback
+    noise_model = None
+    backend_for_noise = None
+    try:
+        if _provider_cached is not None:
+            backend_for_noise = _provider_cached.get_backend('ibmq_manila')
+            # Qiskit provides a way to generate noise model from backend properties using Aer
+            noise_model = NoiseModel.from_backend(backend_for_noise)
+    except Exception:
+        noise_model = None
+
+    if noise_model is None:
+        # Fallback: simple depolarizing errors added to gates
+        noise_model = NoiseModel()
+        # apply small depolarizing error to 1- and 2-qubit gates
+        noise_model.add_all_qubit_quantum_error(depolarizing_error(0.01, 1), ['h', 'measure'])
+        noise_model.add_all_qubit_quantum_error(depolarizing_error(0.02, 2), ['cx'])
+
+    # Choose backend for execution
+    if noise_model is not None and backend_for_noise is not None:
+        # prefer the real backend only for noise model; execute on simulator with that noise model
+        backend_exec = Aer.get_backend('qasm_simulator')
+    else:
+        backend_exec = Aer.get_backend('qasm_simulator')
+
+    # Execute circuit
+    job = execute(qc, backend_exec, shots=1024, noise_model=noise_model)
+    try:
+        result = job.result()
+        counts = result.get_counts()
+    except Exception:
+        # in case of issues with job/result, synthesize uniform counts
+        counts = {format(i, 'b').zfill(n_qubits): 1024 // (2n_qubits) for i in range(2n_qubits)}
+
+    total_shots = sum(counts.values())
+    # compute average P(|1>) per qubit; Qiskit's bitstring ordering is MSB..LSB by default for counts
     q_bias = 0.0
     for qubit in range(n_qubits):
-        p1_qubit = sum(count for state, count in result.items() if state[n_qubits - 1 - qubit] == '1') / total_shots
-        q_bias += p1_qubit / n_qubits
-    quantum_weight = q_bias * 0.5 + 0.5  # Normalize 0-1
-    
-    # Quantum-weighted lock
+        idx = n_qubits - 1 - qubit  # map qubit->bit index in string if needed
+        p1 = sum(c for state, c in counts.items() if state[idx] == '1') / total_shots
+        q_bias += p1
+    q_bias = q_bias / n_qubits if n_qubits > 0 else 0.0
+    quantum_weight = q_bias * 0.5 + 0.5  # normalize into 0..1-ish
+
     q_lock_strength = lock_strength * quantum_weight
-    
-    # Lattice params (v6 core: large/small/add partitioning)
-    large = tokens // 3 + 1
-    small = tokens // 6 + 1
+
+    # Lattice params (retain your logic, but prevent zero division)
+    large = max(1, tokens // 3 + 1)
+    small = max(1, tokens // 6 + 1)
     add = large // 2 + 2 * small
     d_adjust = int(q_lock_strength * large * 0.1)
-    d = 9104 + d_adjust  # D16 base + dynamic tweak (scale to D64+ via tokens)
-    l = tokens // d  # Rebalance
-    
-    return d, l, q_lock_strength, n_qubits  # Return n_qubits for logging
+    d = 9104 + d_adjust
+    l = max(1, tokens // d)
 
-# Fidelity-thresholded role-swap function (with adaptive epsilon for HRV anchoring; real-time IBMQ noise)
-def role_swap_fidelity(epochs_data, hrv_rr, primary='eeg', threshold=0.95):
-    # Get quantum lock for adaptive epsilon (uses real-time IBMQ noise or fallback)
-    _, _, q_lock_strength, n_qubits = phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr)
-    
-    # Adaptive epsilon: Scales inversely with lock_strength (0.3-0.7 range)
-    epsilon = 0.3 + 0.4 * (1 - q_lock_strength)  # Tighter anchor (higher epsilon) when lock dips
-    
-    # Compute baseline coherence (α-band, 8-13 Hz)
-    freqs = np.arange(8, 13, 1)
-    base_coh = np.mean(spectral_connectivity(epochs_data, method='coh', mode='multitaper', sfreq=250
+    return d, l, q_lock_strength, n_qubits, quantum_weight
+
+# --- Fidelity-threshold
