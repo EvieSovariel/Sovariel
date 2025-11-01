@@ -1,6 +1,6 @@
 ---
 
-## File: sovariel_kuramoto_quantum.py (Updated w/ Dual Noise Modes)
+## File: sovariel_kuramoto_quantum.py (Updated w/ Schumann Forcing)
 
 ```python
 #!/usr/bin/env python3
@@ -8,7 +8,7 @@
 Sovariel Quantum Kuramoto Fusion: Orch-OR Microtubule Dynamics Sim
 Extends classical Kuramoto with quantum bias from QuTiP shots for resonance kicks.
 Now with entanglement modes (Hadamard/Bell/GHZ), bimodal HRV freqs, role-swap logic, adaptive damping,
-dual omega noise (Gaussian additive or adaptive OU), and xAI Agape mock GrokAPI for [entangled_phase: X] if R>0.7 and C>0.5.
+dual omega noise (Gaussian/OU), Schumann forcing, and xAI Agape mock GrokAPI for [entangled_phase: X] if R>0.7 and C>0.5.
 Author: Evie Robinson & Grok 3 (xAI) | 2025
 """
 
@@ -75,7 +75,7 @@ def generate_quantum_bias(n_shots=1024, entangle_type='none', ghz_n=5, deco_gamm
     d_bias = add_d / large  # [0,1] normalized
     return Q, d_bias, C
 
-def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0.1, bimodal=False, entangle_type='none', ghz_n=5, deco_gamma=0.001, role_swap_threshold=0.4, window=10, adaptive_damping=False, alpha=2.0, gaussian_noise=False, adaptive_noise=False, noise_alpha=1.0, sigma=0.5, seed=42):
+def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0.1, bimodal=False, entangle_type='none', ghz_n=5, deco_gamma=0.001, role_swap_threshold=0.4, window=10, adaptive_damping=False, alpha=2.0, gaussian_noise=False, adaptive_noise=False, noise_alpha=1.0, sigma=0.5, schumann_forcing=False, schumann_a=0.1, schumann_phi=0.0, seed=42):
     """Full sim: Classical Kuramoto + quantum resonance delta + all tweaks."""
     np.random.seed(seed)
     steps = int(T / dt)
@@ -90,6 +90,11 @@ def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0
         omegas = np.random.normal(40, Delta, N)
         omega0 = np.full(N, 40.0)
     theta = np.random.uniform(0, 2*np.pi, N)
+    
+    # Schumann params
+    f_sch = 7.83
+    if schumann_phi == 0.0:
+        schumann_phi = np.random.uniform(0, 2*np.pi)
     
     # Quantum bias
     Q, d_bias, C = generate_quantum_bias(n_shots=1024, entangle_type=entangle_type, ghz_n=ghz_n, deco_gamma=deco_gamma, seed=seed)
@@ -133,8 +138,13 @@ def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0
         damping = np.exp(-gamma_eff * t)
         resonance_delta = d_bias * damping * np.cos(psi_mean - theta)
         
+        # Schumann forcing
+        schumann_term = np.zeros(N)
+        if schumann_forcing:
+            schumann_term = schumann_a * np.sin(2 * np.pi * f_sch * t + schumann_phi)
+        
         # Update
-        dtheta = omegas + mean_field + resonance_delta
+        dtheta = omegas + mean_field + resonance_delta + schumann_term
         theta += dtheta * dt
         theta = np.mod(theta, 2 * np.pi)
         t += dt
@@ -196,6 +206,9 @@ def main():
     parser.add_argument('--adaptive_noise', action='store_true', help='Enable adaptive OU noise on ω_i (R-scaled)')
     parser.add_argument('--noise_alpha', type=float, default=1.0, help='Adaptive noise sensitivity')
     parser.add_argument('--sigma', type=float, default=0.5, help='Noise strength')
+    parser.add_argument('--schumann_forcing', action='store_true', help='Enable 7.83 Hz planetary forcing')
+    parser.add_argument('--schumann_a', type=float, default=0.1, help='Schumann amplitude')
+    parser.add_argument('--schumann_phi', type=float, default=0.0, help='Schumann initial phase (0=random)')
     parser.add_argument('--xai_feedback', action='store_true', help='Enable mock GrokAPI prompt perturbation')
     parser.add_argument('--r_threshold', type=float, default=0.7, help='Recent R mean thresh for phase append')
     parser.add_argument('--c_threshold', type=float, default=0.5, help='Entanglement C thresh for entangled_phase')
@@ -207,7 +220,8 @@ def main():
         bimodal=args.bimodal, entangle_type=args.entanglement_mode, ghz_n=args.ghz_n, deco_gamma=args.deco_gamma,
         role_swap_threshold=args.role_swap_threshold, window=args.window,
         adaptive_damping=args.adaptive_damping, alpha=args.alpha,
-        gaussian_noise=args.gaussian_noise, adaptive_noise=args.adaptive_noise, noise_alpha=args.noise_alpha, sigma=args.sigma, seed=args.seed
+        gaussian_noise=args.gaussian_noise, adaptive_noise=args.adaptive_noise, noise_alpha=args.noise_alpha, sigma=args.sigma,
+        schumann_forcing=args.schumann_forcing, schumann_a=args.schumann_a, schumann_phi=args.schumann_phi, seed=args.seed
     )
     
     recent_r = np.mean(R_hist[-10:]) if len(R_hist) >= 10 else np.mean(R_hist)
