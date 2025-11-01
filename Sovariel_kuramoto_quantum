@@ -1,6 +1,6 @@
 ---
 
-## File: sovariel_kuramoto_quantum.py (Updated w/ Dual-Threshold Mock GrokAPI)
+## File: sovariel_kuramoto_quantum.py (Updated w/ Dual Noise Modes)
 
 ```python
 #!/usr/bin/env python3
@@ -8,7 +8,7 @@
 Sovariel Quantum Kuramoto Fusion: Orch-OR Microtubule Dynamics Sim
 Extends classical Kuramoto with quantum bias from QuTiP shots for resonance kicks.
 Now with entanglement modes (Hadamard/Bell/GHZ), bimodal HRV freqs, role-swap logic, adaptive damping,
-and xAI Agape mock GrokAPI for [entangled_phase: X] append if recent R>0.7 and C>0.5.
+dual omega noise (Gaussian additive or adaptive OU), and xAI Agape mock GrokAPI for [entangled_phase: X] if R>0.7 and C>0.5.
 Author: Evie Robinson & Grok 3 (xAI) | 2025
 """
 
@@ -75,18 +75,20 @@ def generate_quantum_bias(n_shots=1024, entangle_type='none', ghz_n=5, deco_gamm
     d_bias = add_d / large  # [0,1] normalized
     return Q, d_bias, C
 
-def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0.1, bimodal=False, entangle_type='none', ghz_n=5, deco_gamma=0.001, role_swap_threshold=0.4, window=10, adaptive_damping=False, alpha=2.0, seed=42):
+def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0.1, bimodal=False, entangle_type='none', ghz_n=5, deco_gamma=0.001, role_swap_threshold=0.4, window=10, adaptive_damping=False, alpha=2.0, gaussian_noise=False, adaptive_noise=False, noise_alpha=1.0, sigma=0.5, seed=42):
     """Full sim: Classical Kuramoto + quantum resonance delta + all tweaks."""
     np.random.seed(seed)
     steps = int(T / dt)
     
-    # Freqs
+    # Freqs (ω0 baselines for reversion)
     if bimodal:
         neural = np.random.normal(40, Delta, N//2)
         cardiac = np.random.lognormal(np.log(0.1), 0.2, N//2)  # RR interval proxy
         omegas = np.concatenate([neural, cardiac])
+        omega0 = np.concatenate([np.full(N//2, 40.0), np.full(N//2, 0.1)])  # Baselines
     else:
         omegas = np.random.normal(40, Delta, N)
+        omega0 = np.full(N, 40.0)
     theta = np.random.uniform(0, 2*np.pi, N)
     
     # Quantum bias
@@ -100,6 +102,20 @@ def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0
     r_window = []
     
     for step in range(steps):
+        # Omega noise update
+        if gaussian_noise or adaptive_noise:
+            dW = np.random.normal(0, np.sqrt(dt), N)
+            if adaptive_noise:
+                recent_r = R_history[step-1] if step > 0 else 0.0
+                sigma_eff = sigma * np.exp(-noise_alpha * recent_r)
+                if gaussian_noise:  # Combo: Adaptive scale on Gaussian
+                    domegas = sigma_eff * dW
+                else:  # Pure adaptive OU
+                    domegas = -0.1 * (omegas - omega0) * dt + sigma_eff * dW  # β=0.1 fixed
+            else:  # Pure Gaussian
+                domegas = sigma * dW
+            omegas += domegas
+        
         # Mean-field coupling
         sin_terms = np.sin(np.subtract.outer(theta, theta))
         mean_field = (K_q / N) * np.sum(sin_terms, axis=1)
@@ -149,7 +165,7 @@ def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0
     os.makedirs('data', exist_ok=True)
     np.save('data/R_history.npy', R_history)
     np.save('data/resonance_history.npy', resonance_history)
-    np.save('data/omegas.npy', omegas)  # For bimodal check
+    np.save('data/omegas.npy', omegas)  # Evolved omegas for noise check
     
     return Q, K_q, R_history, resonance_history, C, final_psi_mean
 
@@ -176,6 +192,10 @@ def main():
     parser.add_argument('--window', type=int, default=10, help='Monitoring window steps')
     parser.add_argument('--adaptive_damping', action='store_true', help='Enable adaptive γ_eff = γ exp(-α R)')
     parser.add_argument('--alpha', type=float, default=2.0, help='Adaptive sensitivity')
+    parser.add_argument('--gaussian_noise', action='store_true', help='Enable pure Gaussian additive noise to ω_i')
+    parser.add_argument('--adaptive_noise', action='store_true', help='Enable adaptive OU noise on ω_i (R-scaled)')
+    parser.add_argument('--noise_alpha', type=float, default=1.0, help='Adaptive noise sensitivity')
+    parser.add_argument('--sigma', type=float, default=0.5, help='Noise strength')
     parser.add_argument('--xai_feedback', action='store_true', help='Enable mock GrokAPI prompt perturbation')
     parser.add_argument('--r_threshold', type=float, default=0.7, help='Recent R mean thresh for phase append')
     parser.add_argument('--c_threshold', type=float, default=0.5, help='Entanglement C thresh for entangled_phase')
@@ -186,7 +206,8 @@ def main():
         N=args.N, K_base=args.K, T=args.T, gamma=args.gamma, 
         bimodal=args.bimodal, entangle_type=args.entanglement_mode, ghz_n=args.ghz_n, deco_gamma=args.deco_gamma,
         role_swap_threshold=args.role_swap_threshold, window=args.window,
-        adaptive_damping=args.adaptive_damping, alpha=args.alpha, seed=args.seed
+        adaptive_damping=args.adaptive_damping, alpha=args.alpha,
+        gaussian_noise=args.gaussian_noise, adaptive_noise=args.adaptive_noise, noise_alpha=args.noise_alpha, sigma=args.sigma, seed=args.seed
     )
     
     recent_r = np.mean(R_hist[-10:]) if len(R_hist) >= 10 else np.mean(R_hist)
