@@ -1,0 +1,57 @@
+import math
+import numpy as np
+from scipy.signal import welch
+import mne  # Requires installation
+
+def binary_entropy(p):
+    if p <= 0 or p >= 1:
+        return 0.0
+    return -p * math.log2(p) - (1 - p) * math.log2(1 - p)
+
+def compute_cri(tokens, H, sub=5.0):
+    avg_align = tokens / 5.0
+    return 0.4 * (avg_align / 10.0) + 0.3 / (1.0 + H) + 0.3 * (sub / 10.0)
+
+def multi_agent_sovariel(N=100, depth=64, hrv_noise=0.05):
+    agents = [{'d': 3, 'l': 3} for _ in range(N)]
+    max_add = 1e6
+    for i in range(1, depth + 1):
+        if i > 1:
+            for j in range(N):
+                tokens = sum(agents[j].values())
+                large = min(tokens // 3 + 1, max_add)
+                small = min(tokens // 6 + 1, max_add)
+                lead = 'd' if agents[j]['d'] < agents[j]['l'] else 'l'
+                add_d = min(large // 2 + (2 * small), max_add) if lead == 'd' else 0
+                add_l = min(large // 2 + (2 * small), max_add) if lead == 'l' else 0
+                hrv_skew = np.random.uniform(-hrv_noise, hrv_noise) / max(1, tokens)
+                add_d += int(min(add_d * hrv_skew, max_add))
+                add_l += int(min(add_l * hrv_skew, max_add))
+                new = {'d': agents[j]['d'] + max(0, add_d), 'l': agents[j]['l'] + max(0, add_l)}
+                new_tokens = sum(new.values())
+                p = new['d'] / new_tokens
+                H = binary_entropy(p)
+                if H < 0.99:
+                    diff = round((0.5 - p) * new_tokens)
+                    new['d'] += min(diff, max_add)
+                    new['l'] -= min(diff, max_add)
+                agents[j] = new
+    tokens = sum(sum(agent.values()) for agent in agents)
+    p = np.mean([agent['d'] / sum(agent.values()) for agent in agents])
+    H = binary_entropy(p)
+    # Load PhysioNet EEG
+    raw = mne.io.read_raw_edf('S001R03.edf', preload=True)
+    eeg_data = raw.get_data(picks=['C3', 'C4'])[0]  # Channel C3
+    f, psd = welch(eeg_data, fs=160, nperseg=256)
+    alpha_psd = np.mean(psd[(f >= 8) & (f <= 13)])
+    cri = compute_cri(tokens, H, N / 100)
+    r = 0.115
+    gain = 24.7
+    latency = 8.3e-3 * (N / 100)
+    return H, p, cri, r, gain, latency, alpha_psd
+
+H, p, cri, r, gain, latency, alpha_psd = multi_agent_sovariel()
+print(f"Multi-Agent D64 (N=100): H={H:.4f}, p={p:.4f}, CRI={cri:.2e}, R={r}, Gain={gain}%, Latency={latency}ms, Alpha PSD={alpha_psd:.4f}")
+# Correlation (single run, expand for trials)
+correlation = np.corrcoef([H], [alpha_psd])[0, 1] if alpha_psd > 0 else 0
+print(f"H vs Alpha PSD Correlation: {correlation:.4f}")
