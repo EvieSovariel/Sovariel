@@ -1,6 +1,6 @@
 ---
 
-## File: sovariel_kuramoto_quantum.py (Updated w/ Schumann Forcing)
+## File: sovariel_kuramoto_quantum.py
 
 ```python
 #!/usr/bin/env python3
