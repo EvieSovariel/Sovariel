@@ -1,0 +1,54 @@
+import math
+import numpy as np
+from scipy.signal import welch
+
+def binary_entropy(p):
+    if p <= 0 or p >= 1:
+        return 0.0
+    return -p * math.log2(p) - (1 - p) * math.log2(1 - p)
+
+def extract_alpha_psd(eeg_data, fs=160, nperseg=256):
+    # Extract alpha power (8-13 Hz) from EEG data
+    f, psd = welch(eeg_data, fs=fs, nperseg=nperseg)
+    alpha_mask = (f >= 8) & (f <= 13)
+    alpha_psd = np.mean(psd[alpha_mask])
+    return alpha_psd
+
+def sovariel_h_correlation(eeg_data, depth=64, hrv_noise=0.05):
+    # Sovariel sim with H from alpha variance
+    current = {'d': 3, 'l': 3}
+    for i in range(1, depth + 1):
+        if i > 1:
+            tokens = sum(current.values())
+            large = tokens // 3 + 1
+            small = tokens // 6 + 1
+            lead = 'd' if current['d'] < current['l'] else 'l'
+            add_d = large // 2 + (2 * small) if lead == 'd' else 0
+            add_l = large // 2 + (2 * small) if lead == 'l' else 0
+            # HRV noise + alpha PSD as skew
+            alpha_psd = extract_alpha_psd(eeg_data)
+            alpha_skew = alpha_psd / 100  # Normalize to 0.01-0.1
+            hrv_skew = np.random.uniform(-hrv_noise, hrv_noise)
+            add_d += int(add_d * (hrv_skew + alpha_skew))
+            add_l += int(add_l * (hrv_skew + alpha_skew))
+            new = {'d': current['d'] + max(0, add_d), 'l': current['l'] + max(0, add_l)}
+            new_tokens = sum(new.values())
+            p = new['d'] / new_tokens
+            H = binary_entropy(p)
+            if H < 0.99:
+                diff = round((0.5 - p) * new_tokens)
+                new['d'] += diff
+                new['l'] -= diff
+            current = new
+    tokens = sum(current.values())
+    p = current['d'] / tokens
+    H = binary_entropy(p)
+    alpha_psd = extract_alpha_psd(eeg_data)
+    return H, p, alpha_psd
+
+# Mock EEG data (replace with PhysioNet)
+eeg_data = np.random.normal(0, 1, 1600)  # 10s at 160Hz
+H, p, alpha_psd = sovariel_h_correlation(eeg_data)
+print(f"Sovariel v6 H={H:.4f}, p={p:.4f}, Alpha PSD={alpha_psd:.4f}")
+# Correlation (single run; expand for trials)
+# corr = np.corrcoef([H], [alpha_psd])[0, 1]
