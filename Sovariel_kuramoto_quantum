@@ -1,51 +1,78 @@
 ---
 
-## File: sovariel_kuramoto_quantum.py
+## File: sovariel_kuramoto_quantum.py (Updated w/ All Tweaks)
 
 ```python
 #!/usr/bin/env python3
 """
 Sovariel Quantum Kuramoto Fusion: Orch-OR Microtubule Dynamics Sim
 Extends classical Kuramoto with quantum bias from QuTiP shots for resonance kicks.
+Now with entanglement (Bell), bimodal HRV freqs, and role-swap logic.
 Author: Evie Robinson & Grok 3 (xAI) | 2025
 """
 
 import numpy as np
 import qutip as qt
+from qutip import concurrence
 import argparse
 import os
 
-def generate_quantum_bias(n_shots=1024, seed=42):
-    """Generate Q from Hadamard superposition measurements (Orch-OR collapse proxy)."""
+def generate_quantum_bias(n_shots=1024, entangle=False, seed=42):
+    """Generate Q from Hadamard or Bell superposition (Orch-OR collapse proxy)."""
     np.random.seed(seed)
-    hadamard = (1 / np.sqrt(2)) * qt.Qobj([[1, 1], [1, -1]])
-    psi0 = qt.basis(2, 0)
-    psi = hadamard * psi0
-    prob1 = abs(psi[1, 0])**2  # Ideal 0.5
-    counts1 = np.random.binomial(n_shots, prob1)
-    Q = counts1 / n_shots
+    if not entangle:
+        hadamard = (1 / np.sqrt(2)) * qt.Qobj([[1, 1], [1, -1]])
+        psi0 = qt.basis(2, 0)
+        psi = hadamard * psi0
+        prob1 = abs(psi[1, 0])**2  # Ideal 0.5
+        counts1 = np.random.binomial(n_shots, prob1)
+        Q = counts1 / n_shots
+    else:
+        # Bell state for entanglement
+        bell = (qt.tensor(qt.basis(2,0), qt.basis(2,0)) + qt.tensor(qt.basis(2,1), qt.basis(2,1))) / np.sqrt(2)
+        rho = bell * bell.dag()
+        # Simple deco: amplitude damping gamma=0.01 over t=1
+        c_op = [np.sqrt(0.01) * qt.tensor(qt.sigmam(), qt.qeye(2)), np.sqrt(0.01) * qt.tensor(qt.qeye(2), qt.sigmam())]
+        H = qt.qzero(rho.dims)
+        result = qt.mesolve(H, rho, [0, 1.0], c_ops=c_ops)
+        rho_dec = result.states[-1]
+        C = concurrence(rho_dec)
+        # Base Q from single shot + C multiplier
+        hadamard = (1 / np.sqrt(2)) * qt.Qobj([[1, 1], [1, -1]])
+        psi0 = qt.basis(2, 0)
+        psi = hadamard * psi0
+        prob1 = abs(psi[1, 0])**2
+        counts1 = np.random.binomial(n_shots, prob1)
+        Q_base = counts1 / n_shots
+        Q = Q_base * C
     large = 10000
     add_d = int(Q * large)
     d_bias = add_d / large  # [0,1] normalized
     return Q, d_bias
 
-def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0.1, seed=42):
-    """Full sim: Classical Kuramoto + quantum resonance delta."""
+def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0.1, bimodal=False, entangle=False, role_swap_threshold=0.4, window=10, seed=42):
+    """Full sim: Classical Kuramoto + quantum resonance delta + all tweaks."""
     np.random.seed(seed)
     steps = int(T / dt)
     
-    # Freqs: Gaussian around 40 Hz (gamma proxy, neural vibes)
-    omegas = np.random.normal(40, Delta, N)
+    # Freqs
+    if bimodal:
+        neural = np.random.normal(40, Delta, N//2)
+        cardiac = np.random.lognormal(np.log(0.1), 0.2, N//2)  # RR interval proxy
+        omegas = np.concatenate([neural, cardiac])
+    else:
+        omegas = np.random.normal(40, Delta, N)
     theta = np.random.uniform(0, 2*np.pi, N)
     
     # Quantum bias
-    Q, d_bias = generate_quantum_bias(n_shots=1024, seed=seed)
+    Q, d_bias = generate_quantum_bias(n_shots=1024, entangle=entangle, seed=seed)
     K_q = K_base * Q
     
     # Histories
     R_history = np.zeros(steps)
     resonance_history = np.zeros(steps)
     t = 0.0
+    r_window = []
     
     for step in range(steps):
         # Mean-field coupling
@@ -69,11 +96,26 @@ def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0
         R = np.abs(np.mean(np.exp(1j * theta)))
         R_history[step] = R
         resonance_history[step] = np.mean(np.abs(resonance_delta))
+        
+        # Role-swap logic
+        r_window.append(R)
+        if len(r_window) > window:
+            r_window.pop(0)
+        if len(r_window) == window and np.mean(r_window) < role_swap_threshold:
+            # Find low-coherence: phase diff > pi/2 from psi
+            phase_diffs = np.abs(np.angle(np.exp(1j * (theta - psi_mean))))
+            low_idx = np.where(phase_diffs > np.pi / 2)[0]
+            if len(low_idx) > 0:
+                num_low = len(low_idx)
+                theta[low_idx] = np.random.uniform(0, 2*np.pi, num_low)
+                omegas[low_idx] += Q * np.random.normal(0, Delta, num_low)  # Q-weighted shift
+            r_window = []  # Reset window after swap
     
     # Save data
     os.makedirs('data', exist_ok=True)
     np.save('data/R_history.npy', R_history)
     np.save('data/resonance_history.npy', resonance_history)
+    np.save('data/omegas.npy', omegas)  # For bimodal check
     
     return Q, K_q, R_history, resonance_history
 
@@ -84,11 +126,17 @@ def main():
     parser.add_argument('--T', type=float, default=100.0, help='Sim time (s)')
     parser.add_argument('--gamma', type=float, default=0.1, help='Deco rate')
     parser.add_argument('--n_shots', type=int, default=1024, help='Qubit shots')
+    parser.add_argument('--bimodal', action='store_true', help='Enable HRV bimodal freqs')
+    parser.add_argument('--entangle', action='store_true', help='Use Bell entanglement for Q')
+    parser.add_argument('--role_swap_threshold', type=float, default=0.4, help='R thresh for swaps')
+    parser.add_argument('--window', type=int, default=10, help='Monitoring window steps')
     parser.add_argument('--seed', type=int, default=42, help='RNG seed')
     args = parser.parse_args()
     
     Q, K_q, R_hist, res_hist = kuramoto_quantum_sim(
-        N=args.N, K_base=args.K, T=args.T, gamma=args.gamma, seed=args.seed
+        N=args.N, K_base=args.K, T=args.T, gamma=args.gamma, 
+        bimodal=args.bimodal, entangle=args.entangle, 
+        role_swap_threshold=args.role_swap_threshold, window=args.window, seed=args.seed
     )
     
     print(f"Quantum Q: {Q:.4f} | Effective K_q: {K_q:.4f}")
