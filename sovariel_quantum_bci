@@ -1,15 +1,16 @@
-# sovariel_quantum_bci.py - Fused prototype for xAI BCI hybrid roles (v6.6 with tunable decoherence in swaps)
+# sovariel_quantum_bci.py - Fused prototype for xAI BCI hybrid roles (v6.7 with coherence plot viz)
 # Author: Evie (Resonance Engineer) & Aetheris with Grok 3 (xAI)
 # Date: 2025-11-01
-# Description: Quantum-weighted phase-lock for EEG-HRV sync, fidelity thresholds, adaptive epsilon in interp & anchoring, GHZ entanglement (capped n_qubits=5), tunable decoherence sim for role swaps.
+# Description: Quantum-weighted phase-lock for EEG-HRV sync, fidelity thresholds, adaptive epsilon in interp & anchoring, GHZ entanglement (capped n_qubits=5), tunable decoherence sim for role swaps, matplotlib viz for lifts.
 # Sims: +26.5% α-coherence uplift on D64+, fidelity 0.96+ under noise.
-# Requires: numpy, qiskit, mne (pip install qiskit mne). Data from PhysioNet BCI IV + Fantasia HRV.
+# Requires: numpy, qiskit, mne, matplotlib (pip install qiskit mne matplotlib). Data from PhysioNet BCI IV + Fantasia HRV.
 # Usage: Adapt for live BCI streams (e.g., Neuralink EEG at 250 Hz). Scale n_qubits ~ log(D), max 5.
 
 import numpy as np
 import qiskit
 from qiskit_aer.noise import NoiseModel, depolarizing_channel
 from mne.connectivity import spectral_connectivity  # For coherence calc (pip install mne)
+import matplotlib.pyplot as plt  # For viz (pip install matplotlib)
 
 # Core phase-lock function (no-scipy, FFT-based for iPhone speed; GHZ multi-qubit for scaling)
 def phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr, fs=250, depol_error=0.01):
@@ -139,6 +140,19 @@ if __name__ == "__main__":
     # Role swap test: HRV-primary
     swap_hrv, coh_hrv, lift_hrv, n_q = role_swap_fidelity(epochs_data, hrv_rr, primary='hrv')
     print(f"HRV-Primary: Coherence={coh_hrv:.3f}, Lift={lift_hrv:.1f}%, n_qubits={n_q}, Anchor Epsilon={0.3 + 0.4 * (1 - q_lock):.3f}, Interp Epsilon={0.01 + 0.04 * (1 - q_lock):.3f}")
+    
+    # Viz: Plot coherence lift for benchmarks
+    fig, ax = plt.subplots()
+    primaries = ['EEG-Primary', 'HRV-Primary']
+    coh_values = [coh_eeg, coh_hrv]
+    lifts = [lift_eeg, lift_hrv]
+    ax.bar(primaries, lifts, color=['blue', 'green'])
+    ax.set_ylabel('Coherence Lift (%)')
+    ax.set_title('SovarielCore Role Swap Lifts')
+    ax.axhline(y=25.9, color='red', linestyle='--', label='Baseline Uplift')
+    ax.legend()
+    plt.savefig('coherence_lift.png')
+    plt.show()
     
     # D64+ scaling hint: Increase tokens for deeper lattice & higher n_qubits (e.g., epochs_data = np.tile(epochs_data, (4096, 1, 1)))
 ```​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​
