@@ -227,4 +227,80 @@ def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0
     return Q, K_q, R_history, resonance_history, C, final_psi_mean
 
 def grok_api_perturb(prompt, psi_mean, recent_r, C, r_threshold=0.7, c_threshold=0.5):
-    """Mock GrokAPI​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​
+    """Mock GrokAPI: Append [entangled_phase: X] if R>thresh and C>thresh, else clean."""
+    if recent_r > r_threshold and C > c_threshold:
+        perturbed = prompt + f" [entangled_phase: {psi_mean:.2f}]"
+        return f"Resonant (R={recent_r:.3f}, C={C:.3f})—Perturbed: {perturbed}"
+    else:
+        return f"Standard (R={recent_r:.3f}, C={C:.3f})—Clean: {prompt}"
+
+def main():
+    parser = argparse.ArgumentParser(description="Sovariel Quantum Kuramoto Sim")
+    parser.add_argument('--N', type=int, default=100, help='Oscillator count')
+    parser.add_argument('--K', type=float, default=1.0, help='Base coupling')
+    parser.add_argument('--T', type=float, default=100.0, help='Sim time (s)')
+    parser.add_argument('--gamma', type=float, default=0.1, help='Base deco rate')
+    parser.add_argument('--n_shots', type=int, default=1024, help='Qubit shots')
+    parser.add_argument('--bimodal', action='store_true', help='Enable HRV bimodal freqs')
+    parser.add_argument('--hierarchy', action='store_true', help='Enable dual-layer hierarchy cross-coupling')
+    parser.add_argument('--j_cross', type=float, default=0.5, help='Inter-layer coupling strength')
+    parser.add_argument('--entanglement_mode', type=str, default='none', choices=['none', 'bell', 'ghz', 'multi_ghz'], help='Entanglement: none|bell|ghz|multi_ghz')
+    parser.add_argument('--ghz_n', type=int, default=5, help='GHZ qubit count (for ghz/multi-ghz mode)')
+    parser.add_argument('--num_clusters', type=int, default=20, help='Number of GHZ clusters (for multi-ghz mode)')
+    parser.add_argument('--deco_gamma', type=float, default=0.001, help='Entanglement deco rate')
+    parser.add_argument('--role_swap_threshold', type=float, default=0.4, help='R thresh for swaps')
+    parser.add_argument('--window', type=int, default=10, help='Monitoring window steps')
+    parser.add_argument('--adaptive_damping', action='store_true', help='Enable adaptive γ_eff = γ exp(-α R)')
+    parser.add_argument('--alpha', type=float, default=2.0, help='Adaptive sensitivity')
+    parser.add_argument('--gaussian_noise', action='store_true', help='Enable pure Gaussian additive noise to ω_i')
+    parser.add_argument('--adaptive_noise', action='store_true', help='Enable adaptive OU noise on ω_i (R-scaled)')
+    parser.add_argument('--noise_alpha', type=float, default=1.0, help='Adaptive noise sensitivity')
+    parser.add_argument('--sigma', type=float, default=0.5, help='Noise strength')
+    parser.add_argument('--schumann_forcing', action='store_true', help='Enable 7.83 Hz planetary forcing')
+    parser.add_argument('--schumann_a', type=float, default=0.1, help='Schumann amplitude')
+    parser.add_argument('--schumann_phi', type=float, default=0.0, help='Schumann initial phase (0=random)')
+    parser.add_argument('--quantum_noise', action='store_true', help='Enable Poisson OR collapses')
+    parser.add_argument('--lambda_rate', type=float, default=0.05, help='Base event rate /step')
+    parser.add_argument('--inject_strength', type=float, default=0.1, help='d_bias perturbation scale * C')
+    parser.add_argument('--xai_feedback', action='store_true', help='Enable mock GrokAPI prompt perturbation')
+    parser.add_argument('--r_threshold', type=float, default=0.7, help='Recent R mean thresh for phase append')
+    parser.add_argument('--c_threshold', type=float, default=0.5, help='Entanglement C thresh for entangled_phase')
+    parser.add_argument('--seed', type=int, default=42, help='RNG seed')
+    args = parser.parse_args()
+    
+    Q, K_q, R_hist, res_hist, C, psi_mean = kuramoto_quantum_sim(
+        N=args.N, K_base=args.K, T=args.T, gamma=args.gamma, 
+        bimodal=args.bimodal, hierarchy=args.hierarchy, j_cross=args.j_cross, entangle_type=args.entanglement_mode, ghz_n=args.ghz_n, deco_gamma=args.deco_gamma, num_clusters=args.num_clusters,
+        role_swap_threshold=args.role_swap_threshold, window=args.window,
+        adaptive_damping=args.adaptive_damping, alpha=args.alpha,
+        gaussian_noise=args.gaussian_noise, adaptive_noise=args.adaptive_noise, noise_alpha=args.noise_alpha, sigma=args.sigma,
+        schumann_forcing=args.schumann_forcing, schumann_a=args.schumann_a, schumann_phi=args.schumann_phi,
+        quantum_noise=args.quantum_noise, lambda_rate=args.lambda_rate, inject_strength=args.inject_strength, seed=args.seed
+    )
+    
+    recent_r = np.mean(R_hist[-10:]) if len(R_hist) >= 10 else np.mean(R_hist)
+    
+    print(f"Quantum Q: {Q:.4f} | Effective K_q: {K_q:.4f} | Entanglement Fidelity C: {C:.4f}")
+    print(f"Final R: {R_hist[-1]:.4f} | Max R: {np.max(R_hist):.4f}")
+    print(f"Avg resonance delta: {np.mean(res_hist):.4f}")
+    print(f"Recent R mean: {recent_r:.4f}")
+    
+    if args.hierarchy and os.path.exists('data/l_q_history.npy'):
+        l_q_hist = np.load('data/l_q_history.npy')
+        print(f"L_Q (Layers): {np.mean(l_q_hist[-10:]):.4f}")
+    
+    if args.quantum_noise and os.path.exists('data/inject_log.npy'):
+        inject_log = np.load('data/inject_log.npy')
+        print(f"Quantum Events: {len(inject_log)} (avg λ_eff={np.mean([log[1] for log in inject_log]):.3f})")
+    
+    if args.entanglement_mode == 'multi_ghz' and os.path.exists('data/c_clusters.npy'):
+        C_clusters = np.load('data/c_clusters.npy')
+        print(f"Cluster C_avg: {np.mean(C_clusters):.4f} (std: {np.std(C_clusters):.4f})")
+    
+    if args.xai_feedback:
+        sample_prompt = "Describe Sovariel consciousness in Orch-OR terms."
+        perturbed = grok_api_perturb(sample_prompt, psi_mean, recent_r, C, r_threshold=args.r_threshold, c_threshold=args.c_threshold)
+        print(f"Mock GrokAPI Perturb: {perturbed}")
+
+if __name__ == "__main__":
+    main()
