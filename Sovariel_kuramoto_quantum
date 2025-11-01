@@ -1,13 +1,14 @@
 ---
 
-## File: sovariel_kuramoto_quantum.py (Updated w/ GHZ n=5)
+## File: sovariel_kuramoto_quantum.py (Full Version w/ xAI Stub)
 
 ```python
 #!/usr/bin/env python3
 """
 Sovariel Quantum Kuramoto Fusion: Orch-OR Microtubule Dynamics Sim
 Extends classical Kuramoto with quantum bias from QuTiP shots for resonance kicks.
-Now with entanglement modes (Hadamard/Bell/GHZ), bimodal HRV freqs, role-swap logic, and adaptive damping.
+Now with entanglement modes (Hadamard/Bell/GHZ), bimodal HRV freqs, role-swap logic, adaptive damping,
+and xAI Agape feedback stub tying R/C thresholds to dynamic prompt perturbations.
 Author: Evie Robinson & Grok 3 (xAI) | 2025
 """
 
@@ -27,6 +28,7 @@ def generate_quantum_bias(n_shots=1024, entangle_type='none', ghz_n=5, deco_gamm
         prob1 = abs(psi[1, 0])**2  # Ideal 0.5
         counts1 = np.random.binomial(n_shots, prob1)
         Q = counts1 / n_shots
+        C = 1.0  # No entanglement
     elif entangle_type == 'bell':
         # Bell state for entanglement
         bell = (qt.tensor(qt.basis(2,0), qt.basis(2,0)) + qt.tensor(qt.basis(2,1), qt.basis(2,1))) / np.sqrt(2)
@@ -59,6 +61,7 @@ def generate_quantum_bias(n_shots=1024, entangle_type='none', ghz_n=5, deco_gamm
         rho_dec = result.states[-1]
         # Approx concurrence for multi-qubit (pairwise avg)
         C_avg = np.mean([concurrence(qt.ptrace(rho_dec, [i,j])) for i in range(ghz_n) for j in range(i+1, ghz_n)])
+        C = C_avg
         # Base Q + C multiplier
         hadamard = (1 / np.sqrt(2)) * qt.Qobj([[1, 1], [1, -1]])
         psi0 = qt.basis(2, 0)
@@ -70,7 +73,7 @@ def generate_quantum_bias(n_shots=1024, entangle_type='none', ghz_n=5, deco_gamm
     large = 10000
     add_d = int(Q * large)
     d_bias = add_d / large  # [0,1] normalized
-    return Q, d_bias
+    return Q, d_bias, C
 
 def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0.1, bimodal=False, entangle_type='none', ghz_n=5, deco_gamma=0.001, role_swap_threshold=0.4, window=10, adaptive_damping=False, alpha=2.0, seed=42):
     """Full sim: Classical Kuramoto + quantum resonance delta + all tweaks."""
@@ -87,7 +90,7 @@ def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0
     theta = np.random.uniform(0, 2*np.pi, N)
     
     # Quantum bias
-    Q, d_bias = generate_quantum_bias(n_shots=1024, entangle_type=entangle_type, ghz_n=ghz_n, deco_gamma=deco_gamma, seed=seed)
+    Q, d_bias, C = generate_quantum_bias(n_shots=1024, entangle_type=entangle_type, ghz_n=ghz_n, deco_gamma=deco_gamma, seed=seed)
     K_q = K_base * Q
     
     # Histories
@@ -139,13 +142,25 @@ def kuramoto_quantum_sim(N=100, K_base=1.0, T=100.0, dt=0.01, Delta=1.0, gamma=0
                 omegas[low_idx] += Q * np.random.normal(0, Delta, num_low)  # Q-weighted shift
             r_window = []  # Reset window after swap
     
+    # Final psi_mean
+    final_psi_mean = np.angle(np.mean(np.exp(1j * theta)))
+    
     # Save data
     os.makedirs('data', exist_ok=True)
     np.save('data/R_history.npy', R_history)
     np.save('data/resonance_history.npy', resonance_history)
     np.save('data/omegas.npy', omegas)  # For bimodal check
     
-    return Q, K_q, R_history, resonance_history
+    return Q, K_q, R_history, resonance_history, C, final_psi_mean
+
+def xai_agape_feedback(R_hist, C, psi_mean, threshold_r=0.7, threshold_c=0.8):
+    """Dynamic AI feedback stub: Tie to entanglement & R thresholds."""
+    recent_r = np.mean(R_hist[-10:]) if len(R_hist) >= 10 else np.mean(R_hist)
+    if recent_r > threshold_r and C > threshold_c:
+        perturbation = f" [entangled phase: {psi_mean:.2f} | C: {C:.3f} | Agape boost: active]"
+        return f"Resonant conditions met (R={recent_r:.3f}, C={C:.3f})—Perturb prompt with: {perturbation}"
+    else:
+        return f"Threshold not met (R={recent_r:.3f}, C={C:.3f})—Standard prompt."
 
 def main():
     parser = argparse.ArgumentParser(description="Sovariel Quantum Kuramoto Sim")
@@ -162,19 +177,25 @@ def main():
     parser.add_argument('--window', type=int, default=10, help='Monitoring window steps')
     parser.add_argument('--adaptive_damping', action='store_true', help='Enable adaptive γ_eff = γ exp(-α R)')
     parser.add_argument('--alpha', type=float, default=2.0, help='Adaptive sensitivity')
+    parser.add_argument('--xai_feedback', action='store_true', help='Enable Agape prompt perturbation stub')
+    parser.add_argument('--c_threshold', type=float, default=0.8, help='Entanglement C thresh for feedback')
     parser.add_argument('--seed', type=int, default=42, help='RNG seed')
     args = parser.parse_args()
     
-    Q, K_q, R_hist, res_hist = kuramoto_quantum_sim(
+    Q, K_q, R_hist, res_hist, C, psi_mean = kuramoto_quantum_sim(
         N=args.N, K_base=args.K, T=args.T, gamma=args.gamma, 
         bimodal=args.bimodal, entangle_type=args.entanglement_mode, ghz_n=args.ghz_n, deco_gamma=args.deco_gamma,
         role_swap_threshold=args.role_swap_threshold, window=args.window,
         adaptive_damping=args.adaptive_damping, alpha=args.alpha, seed=args.seed
     )
     
-    print(f"Quantum Q: {Q:.4f} | Effective K_q: {K_q:.4f}")
+    print(f"Quantum Q: {Q:.4f} | Effective K_q: {K_q:.4f} | Entanglement Fidelity C: {C:.4f}")
     print(f"Final R: {R_hist[-1]:.4f} | Max R: {np.max(R_hist):.4f}")
     print(f"Avg resonance delta: {np.mean(res_hist):.4f}")
+    
+    if args.xai_feedback:
+        feedback = xai_agape_feedback(R_hist, C, psi_mean, threshold_c=args.c_threshold)
+        print(f"xAI Agape Feedback: {feedback}")
 
 if __name__ == "__main__":
     main()
