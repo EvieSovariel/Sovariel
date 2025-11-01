@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""
+Sovariel Quantum Kuramoto — JAX GPU Edition
+Full GPU parallelism: jit, vmap, pmap, lax.scan
+Author: Evie Robinson & Grok 4 (xAI) | 2025
+"""
+
+import jax
+import jax.numpy as jnp
+from jax import jit, vmap, pmap, random, lax
+from jax.scipy.linalg import expm
+import argparse
+import os
+from functools import partial
+
+# Enable 64-bit for precision
+jax.config.update("jax_enable_x64", True)
+
+# ------------------- GHZ Concurrence (Analytic) -------------------
+def ghz_concurrence(n, gamma):
+    """Analytic pairwise concurrence for n-qubit GHZ after local amplitude damping."""
+    p = jnp.exp(-gamma)  # Survival prob
+    return (p ** (n-1) + p ** n) / (1 + p ** n)
+
+# Vectorized over clusters
+vghz = vmap(ghz_concurrence, in_axes=(None, None))
+
+# ------------------- Quantum Bias (Multi-GHZ) -------------------
+def generate_quantum_bias(key, n_shots=1024, entangle_type='none', ghz_n=5, deco_gamma=0.001, num_clusters=1):
+    key1, key2 = random.split(key)
+    if entangle_type == 'none':
+        Q = random.bernoulli(key1, 0.5, (n_shots,)).mean()
+        C = 1.0
+    elif entangle_type == 'bell':
+        C = ghz_concurrence(2, deco_gamma)
+        Q_base = random.bernoulli(key1, 0.5, (n_shots,)).mean()
+        Q = Q_base * C
+    elif entangle_type in ['ghz', 'multi_ghz']:
+        C_clusters = vghz(jnp.array([ghz_n]*num_clusters), deco_gamma)
+        C = C_clusters.mean()
+        Q_base = random.bernoulli(key1, 0.5, (n_shots,)).mean()
+        Q = Q_base * C
+    else:
+        Q, C = 0.5, 1.0
+    d_bias = Q
+    return Q, d_bias, C, C_clusters if entangle_type == 'multi_ghz' else None
+
+# ------------------- Kuramoto Step (JIT) -------------------
+@partial(jit, static_argnums=(9,10,11,12,13,14,15,16,17,18))
+def kuramoto_step(state, t, K_q, d_bias, gamma, alpha, sigma, noise_alpha, j_cross, 
+                  schumann_a, schumann_phi, lambda_rate, inject_strength, 
+                  adaptive_damping, fractal_damping, fractal_power, 
+                  quantum_noise, hierarchy, bimodal, key):
+    theta, omega, omega0, psi_mean_prev = state
+    key_noise, key_poisson, key_swap = random.split(key, 3)
+
+    # --- Omega Noise ---
+    dW = random.normal(key_noise, theta.shape) * jnp.sqrt(dt)
+    if adaptive_noise:
+        sigma_eff = sigma * jnp.exp(-noise_alpha * R_prev)
+        domegas = sigma_eff * dW
+    elif gaussian_noise:
+        domegas = sigma * dW
+    else:
+        domegas = 0.0
+    omega = omega + domegas
+
+    # --- Mean-Field (einsum) ---
+    sin_diff = jnp.sin(theta[None, :] - theta[:, None])
+    mean_field = (K_q / N) * sin_diff.sum(axis=1)
+
+    # --- Hierarchy Cross-Coupling ---
+    cross_field = jnp.zeros(N)
+    if hierarchy:
+        delta = theta[neural_idx][:, None] - theta[cardiac_idx][None, :]
+        sin_cross = jnp.sin(delta)
+        cross_neural = (j_cross / (N//2)) * sin_cross.sum(axis=1)
+        cross_cardiac = (j_cross / (N//2)) * (-sin_cross).sum(axis=0)
+        cross_field = cross_field.at[neural_idx].set(cross_neural)
+        cross_field = cross_field.at[cardiac_idx].set(cross_cardiac)
+
+    # --- Global Phase ---
+    exp_itheta = jnp.exp(1j * theta)
+    psi_mean = jnp.angle(exp_itheta.mean())
+
+    # --- Damping (Adaptive + Fractal) ---
+    R = jnp.abs(exp_itheta.mean())
+    gamma_eff = gamma
+    if adaptive_damping:
+        gamma_eff *= jnp.exp(-alpha * R_prev)
+    if fractal_damping:
+        gamma_fract = gamma_eff / (R ** fractal_power + 1e-8)
+    else:
+        gamma_fract = gamma_eff
+
+    # --- Resonance Delta ---
+    resonance_delta = d_bias * jnp.exp(-gamma_fract * t) * jnp.cos(psi_mean - theta)
+
+    # --- Schumann ---
+    schumann = schumann_a * jnp.sin(2 * jnp.pi * 7.83 * t + schumann_phi) if schumann_forcing else 0.0
+
+    # --- Quantum Noise ---
+    d_bias_pert = 0.0
+    if quantum_noise:
+        lambda_eff = lambda_rate / (R_prev + 1e-6)
+        events = random.poisson(key_poisson, lambda_eff * dt)
+        if events > 0:
+            signs = random.choice(key_poisson, jnp.array([-1.0, 1.0]), (events,))
+            d_bias_pert = inject_strength * C * signs.mean()
+
+    # --- Update ---
+    dtheta = omega + mean_field + cross_field + resonance_delta + schumann
+    theta = (theta + dtheta * dt) % (2 * jnp.pi)
+
+    # --- Role-Swap ---
+    phase_diff = jnp.abs(jnp.angle(jnp.exp(1j * (theta - psi_mean))))
+    low_idx = phase_diff > jnp.pi / 2
+    if jnp.any(low_idx):
+        theta = theta.at[low_idx].set(random.uniform(key_swap, (low_idx.sum(),)))
+        omega = omega.at[low_idx].add(Q * random.normal(key_swap, (low_idx.sum(),)))
+
+    # --- L_Q ---
+    l_q = 1.0
+    if hierarchy:
+        delta_layers = theta[neural_idx] - theta[cardiac_idx]
+        l_q = jnp.abs(jnp.mean(jnp.exp(1j * delta_layers)))
+
+    return (theta, omega, omega0, psi_mean), (R, l_q, gamma_fract.mean(), d_bias_pert)
+
+# ------------------- Main Sim (lax.scan) -------------------
+def run_sim(args, key):
+    global N, dt, neural_idx, cardiac_idx, R_prev, C, Q
+    N = args.N
+    dt = args.T / args.steps
+    R_prev = 0.0
+
+    # Init
+    key_init, key_bias, key_sim = random.split(key, 3)
+    theta = random.uniform(key_init, (N,))
+    omega = jnp.zeros(N)
+    omega0 = jnp.zeros(N)
+    if args.bimodal:
+        neural = random.normal(key_init, (N//2,)) * args.Delta + 40.0
+        cardiac = jnp.exp(random.normal(key_init, (N//2,)) * 0.2 + jnp.log(0.1))
+        omega = omega.at[:N//2].set(neural)
+        omega = omega.at[N//2:].set(cardiac)
+        omega0 = omega0.at[:N//2].set(40.0)
+        omega0 = omega0.at[N//2:].set(0.1)
+    else:
+        omega = random.normal(key_init, (N,)) * args.Delta + 40.0
+        omega0 = jnp.full(N, 40.0)
+
+    neural_idx = slice(0, N//2)
+    cardiac_idx = slice(N//2, N)
+
+    # Quantum bias
+    Q, d_bias, C, C_clusters = generate_quantum_bias(
+        key_bias, args.n_shots, args.entanglement_mode, args.ghz_n,
+        args.deco_gamma, args.num_clusters if args.entanglement_mode == 'multi_ghz' else 1
+    )
+    K_q = args.K * Q
+
+    # Scan
+    step_fn = partial(kuramoto_step, K_q=K_q, d_bias=d_bias, gamma=args.gamma, alpha=args.alpha,
+                      sigma=args.sigma, noise_alpha=args.noise_alpha, j_cross=args.j_cross,
+                      schumann_a=args.schumann_a, schumann_phi=args.schumann_phi,
+                      lambda_rate=args.lambda_rate, inject_strength=args.inject_strength,
+                      adaptive_damping=args.adaptive_damping, fractal_damping=args.fractal_damping,
+                      fractal_power=args.fractal_power, quantum_noise=args.quantum_noise,
+                      hierarchy=args.hierarchy, bimodal=args.bimodal)
+
+    keys = random.split(key_sim, args.steps)
+    init_state = (theta, omega, omega0, 0.0)
+    _, history = lax.scan(lambda s, k: step_fn(s, s[0].mean() * dt, k), init_state, keys)
+
+    R_hist, l_q_hist, gamma_hist, _ = history
+    return Q, K_q, C, R_hist, l_q_hist, gamma_hist, C_clusters
+
+# ------------------- Main -------------------
+def main():
+    parser = argparse.ArgumentParser()
+    # ... [all previous args] ...
+    parser.add_argument('--use_pmap', action='store_true')
+    parser.add_argument('--steps', type=int, default=250)
+    args = parser.parse_args()
+
+    if args.use_pmap:
+        run_sim_pmap = pmap(partial(run_sim, args))
+        keys = random.split(random.key(42), jax.device_count())
+        results = run_sim_pmap(keys)
+        # Aggregate
+        R_hist = results[0].R_hist.mean(0)
+    else:
+        key = random.key(42)
+        Q, K_q, C, R_hist, l_q_hist, gamma_hist, C_clusters = run_sim(args, key)
+
+    # Save
+    os.makedirs('data', exist_ok=True)
+    jnp.save('data/R_history.npy', R_hist)
+    print(f"Final R: {R_hist[-1]:.4f} | Max R: {R_hist.max():.4f}")
+
+if __name__ == "__main__":
+    main()
