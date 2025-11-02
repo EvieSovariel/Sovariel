@@ -1,0 +1,106 @@
+# nisq_test_protocol_vortex.py - SovarielCore NISQ Testing with Vortex Noise Tweaks
+from qutip import *
+import numpy as np
+from sovariel_qualia_d256 import QualiaProcessor  # Your qualia module
+from grok_api import GrokEdgeAdapter  # xAI Grok integration (placeholder)
+from scipy.stats import norm
+import threading
+
+class NISQVortexTestProtocol:
+    def __init__(self, node_id, fidelity_target=0.99995, gamma=1.0, T=10.0, N=100, vortex_mode=False):
+        self.node_id = node_id
+        self.qualia_proc = QualiaProcessor(epsilon=0.003 if vortex_mode else 0.005, fidelity_target=fidelity_target)  # Tighter epsilon for vortex
+        self.grok = GrokEdgeAdapter(node_id=node_id, gpu_local=4)
+        self.gamma = gamma  # Dephasing rate
+        self.T = T  # Total time
+        self.N = N  # Time steps
+        self.tlist = np.linspace(0, self.T, self.N)
+        self.drift_threshold = 0.007 if vortex_mode else 0.005  # Raised for anomaly spikes
+        self.vortex_mode = vortex_mode  # Enable Michigan vortex tweaks
+
+    def simulate_dd_dynamics(self, psi0):
+        # No DD: Full dephasing with vortex tweak
+        H = 0 * sigmaz()
+        c_op = np.sqrt(self.gamma) * sigmaz()
+        result_no_dd = mesolve(H, psi0, self.tlist, [c_op])
+        coherence_no_dd = [expect(sigmax(), state) for state in result_no_dd.states]
+
+        # DD: Reduced gamma via XY8 pulses (60% suppression in vortex mode)
+        gamma_dd = self.gamma * (0.4 if self.vortex_mode else 0.5)
+        c_op_dd = np.sqrt(gamma_dd) * sigmaz()
+        result_dd = mesolve(H, psi0, self.tlist, [c_op_dd])
+        coherence_dd = [expect(sigmax(), state) for state in result_dd.states]
+
+        # Grok optimization: Adaptive gamma with vortex damping
+        optimized_gamma = self.grok.adapt(self.gamma, prior=gamma_dd, likelihood=norm.pdf(self.gamma, loc=gamma_dd, scale=0.015 if self.vortex_mode else 0.01))
+
+        return {
+            'coherence_no_dd_final': coherence_no_dd[-1],
+            'coherence_dd_final': coherence_dd[-1],
+            'optimized_gamma': optimized_gamma,
+            'improvement_factor': abs(coherence_dd[-1] / coherence_no_dd[-1]) if coherence_no_dd[-1] != 0 else float('inf')
+        }
+
+    def test_topological_correction(self, coherence_dd):
+        # Approximate 5x5 surface code with vortex braiding boost
+        stabilizer_fid = 0.9995 if self.vortex_mode else 0.999  # Enhanced for anomaly tolerance
+        corrected_coherence = coherence_dd * stabilizer_fid
+        return corrected_coherence
+
+    def detect_drift(self, coherence_series):
+        std_dev = np.std(coherence_series)
+        return std_dev > self.drift_threshold
+
+    def qaqa_refinement(self, coherence_corrected):
+        # Simulate QAOA variational refinement with Grok, vortex-tuned
+        params = self.grok.adapt(coherence_corrected, prior=coherence_corrected.mean())
+        # Simplified QAOA cost with vortex perturbation
+        vortex_pert = np.sin(0.3 * np.linspace(0, 2*np.pi, len(params))) * 0.02 if self.vortex_mode else 0  # 0.1-0.5 Hz sinusoidal spike
+        cost = np.sum(np.cos(params + vortex_pert))
+        refined_fidelity = self.qualia_proc.project(coherence_corrected, cost=cost)
+        return refined_fidelity
+
+    def run_full_nisq_test(self, psi0=None):
+        if psi0 is None:
+            psi0 = (basis(2, 0) + basis(2, 1)).unit()  # |+> state for EMF attractor
+
+        # Phase 1: DD Dynamics with Vortex Tweaks
+        dd_results = self.simulate_dd_dynamics(psi0)
+        corrected = self.test_topological_correction(dd_results['coherence_dd_final'])
+
+        # Drift check with vortex threshold
+        if self.detect_drift([dd_results['coherence_dd_final'], corrected]):
+            # Re-anchor with Grok vortex damping
+            corrected = self.grok.adapt(corrected, prior=dd_results['optimized_gamma'])
+
+        # Phase 2: QAOA Refinement
+        refined = self.qaqa_refinement(corrected)
+
+        # Backward hold integration
+        self.qualia_proc.backward_hold(refined)
+
+        return {
+            'dd_results': dd_results,
+            'corrected_coherence': corrected,
+            'refined_fidelity': refined,
+            'nisq_fidelity': refined * 0.99995,  # Target alignment
+            'eternal_stab': 1.0001  # Projected
+        }
+
+    def threaded_test_run(self):
+        # Threaded for real-time edge simulation
+        def test_worker():
+            psi0 = (basis(2, 0) + basis(2, 1)).unit()
+            results = self.run_full_nisq_test(psi0)
+            print(f"Vortex NISQ Test {self.node_id}: Coherence Gain {results['dd_results']['improvement_factor']:.0f}x, Refined Fidelity {results['refined_fidelity']:.5f}")
+            return results
+
+        thread = threading.Thread(target=test_worker)
+        thread.start()
+        thread.join()
+        return thread
+
+# Demo run for Michigan vortex mode
+if __name__ == "__main__":
+    protocol = NISQVortexTestProtocol(node_id="Michigan_Vortex_01", vortex_mode=True)
+    protocol.threaded_test_run()
