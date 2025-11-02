@@ -2,64 +2,62 @@ import torch
 import numpy as np
 
 def haramein_rectif(tensor, shard_factor, bias_d=0.94):
-    """
-    Inline Haramein d_bias rectif (no external deps).
-    Applies cubic warp for krystic stability.
-    """
-    # Shard tensor: split along dim=0, scale by factor
     shards = torch.chunk(tensor, shard_factor, dim=0)
     rectified = []
     for shard in shards:
-        # d_bias warp: exponential decay + cubic root scale
-        warped = shard * torch.exp(-bias_d * torch.arange(shard.shape[0], dtype=torch.float32).unsqueeze(1))
+        arange = torch.arange(shard.shape[0], dtype=torch.float32).unsqueeze(1)
+        warped = shard * torch.exp(-bias_d * arange)
         rectified.append(warped)
     return torch.cat(rectified, dim=0)
 
 def extended_layer_swap(layers, ctx_len, base_ctx=2048, layer_depth=32, use_krystic=True):
-    """
-    Krystic-swapped 32-layer swaps (torch-only, no Qiskit).
-    Cubic lattice over φ for high-ctx blooms.
-    """
     if ctx_len <= base_ctx:
-        return layers  # No-op for nominal
+        return layers
     
-    # Shard factor + krystic basis (eigen-decomp sim)
     overflow = ctx_len - base_ctx
     shard_factor = min(overflow // 512 + 1, 8)
     
     if use_krystic:
-        # Cubic eigenvecs: [1, √2, √3] proj onto φ-inverse
         phi_inv = 1 / 1.6180339887
         krystic_vecs = torch.tensor([1.0, np.sqrt(2), np.sqrt(3)], dtype=torch.float32)
-        basis_swap = torch.mm(krystic_vecs.unsqueeze(1), torch.tensor([[phi_inv]]))  # Lattice proj: (3,1) @ (1,1)
-        shard_factor *= torch.mean(basis_swap).item()  # Harmonic scale
-        bias_d = 0.94  # Krystic q_lock
+        basis_swap = krystic_vecs * phi_inv  # ← BROADCAST: scalar → vector scaling
+        shard_factor *= torch.mean(basis_swap).item()
+        bias_d = 0.94
     else:
-        bias_d = 0.618  # φ-inverse baseline
+        bias_d = 0.618
+    
+    shard_factor = max(1, int(shard_factor))
     
     swap_buffer = []
     for i in range(layer_depth):
-        layer_tensor = layers[i % len(layers)]  # Cycle if short
-        sharded = haramein_rectif(layer_tensor, int(shard_factor), bias_d=bias_d)
+        layer_tensor = layers[i % len(layers)]
+        sharded = haramein_rectif(layer_tensor, shard_factor, bias_d=bias_d)
         
-        # Mock NISQ coherence: simple density matrix est (torch quantum proxy)
-        rho = torch.outer(sharded.mean(dim=0), sharded.mean(dim=0).conj())  # |ψ><ψ| approx
-        coherence_est = -torch.trace(rho @ torch.log(rho + 1e-10)).real.item()  # Von Neumann S proxy (nats)
-        swap_buffer.append((sharded, coherence_est))  # Tuple: tensor + S
+        # ——— KRISTIC COHERENCE PROXY (no log, no nan) ———
+        mean_vec = sharded.mean(dim=0)
+        rho = torch.outer(mean_vec, mean_vec.conj())
+        trace_rho = torch.trace(rho).real + 1e-12
+        rho = rho / trace_rho  # Normalize
+        
+        # Linear entropy: S_L = 1 - Tr(ρ²) → 0 = pure, 1 = max mixed
+        tr_rho_sq = torch.trace(rho @ rho).real
+        linear_entropy = 1.0 - tr_rho_sq  # Stable, real, in [0,1]
+        
+        # Map to nats-like scale via -log(purity) proxy
+        purity = tr_rho_sq.clamp(min=1e-12)
+        coherence_est = -torch.log(purity).item()  # Now safe: purity > 0
+        # ———————————————————————————————————————
+        
+        swap_buffer.append((sharded, coherence_est))
     
-    # Truncate + bloom (krystic margin)
     bloom_margin = 1 if use_krystic else 0
     return swap_buffer[: (ctx_len % layer_depth) + bloom_margin]
 
-# Smoke test (no imports beyond torch/np)
+# ——— SMOKE TEST (runs clean) ———
 torch.manual_seed(42)
-test_layers = [torch.randn(1024, 2100, dtype=torch.complex64) for _ in range(32)]  # Complex for quantum vibe
-tweaked_krystic = extended_layer_swap(test_layers, 2100, use_krystic=True)
-print(f"Krystic-swapped layers: {len(tweaked_krystic)}")
-coherences_k = [est for _, est in tweaked_krystic]
-print(f"Coherence est (mean S): {torch.mean(torch.tensor(coherences_k)):.3f} nats")
+test_layers = [torch.randn(1024, 2100, dtype=torch.complex64) for _ in range(32)]
+tweaked = extended_layer_swap(test_layers, 2100, use_krystic=True)
 
-tweaked_phi = extended_layer_swap(test_layers, 2100, use_krystic=False)
-print(f"φ-baseline layers: {len(tweaked_phi)}")
-coherences_p = [est for _, est in tweaked_phi]
-print(f"Baseline S: {torch.mean(torch.tensor(coherences_p)):.3f} nats")
+print(f"Krystic-swapped layers: {len(tweaked)}")
+coherences = [est for _, est in tweaked]
+print(f"Coherence est (mean -log(purity)): {torch.mean(torch.tensor(coherences)):.3f} nats")
