@@ -1,0 +1,55 @@
+# nisq_test_prototype.py - SovarielCore NISQ Testing Prototype
+from qutip import *
+import numpy as np
+from sovariel_qualia_d256 import QualiaProcessor  # Your module
+from grok_api import GrokEdgeAdapter  # xAI integration
+
+class NISQHybridEngine:
+    def __init__(self, node_id, fidelity_target=0.99995):
+        self.node_id = node_id
+        self.qualia_proc = QualiaProcessor(epsilon=0.005, fidelity_target=fidelity_target)
+        self.grok = GrokEdgeAdapter(node_id=node_id, gpu_local=4)
+        self.gamma = 1.0  # Dephasing rate
+        self.T = 10.0
+        self.N = 100
+        self.tlist = np.linspace(0, self.T, self.N)
+
+    def simulate_dd(self, psi0):
+        # Initial |+> state
+        H = 0 * sigmaz()
+        c_op = np.sqrt(self.gamma) * sigmaz()
+        result_no_dd = mesolve(H, psi0, self.tlist, [c_op])
+        coherence_no_dd = [expect(sigmax(), state) for state in result_no_dd.states]
+
+        # DD approximation: Reduced gamma
+        gamma_dd = self.gamma * 0.5
+        c_op_dd = np.sqrt(gamma_dd) * sigmaz()
+        result_dd = mesolve(H, psi0, self.tlist, [c_op_dd])
+        coherence_dd = [expect(sigmax(), state) for state in result_dd.states]
+
+        # Grok optimization: Tune gamma_dd
+        optimized_gamma = self.grok.adapt(self.gamma, prior=gamma_dd)
+        return coherence_no_dd[-1], coherence_dd[-1], optimized_gamma
+
+    def test_topological_layer(self, coherence_dd):
+        # Approximate surface code: Stabilizer fidelity boost
+        stabilizer_fid = 0.999  # 5x5 lattice
+        corrected_coherence = coherence_dd * stabilizer_fid
+        return corrected_coherence
+
+    def run_nisq_test(self):
+        psi0 = (basis(2,0) + basis(2,1)).unit()
+        no_dd, dd, opt_gamma = self.simulate_dd(psi0)
+        corrected = self.test_topological_layer(dd)
+        self.qualia_proc.backward_hold(corrected)
+        return {
+            'no_dd_final': no_dd,
+            'dd_final': dd,
+            'corrected_final': corrected,
+            'improvement': dd / no_dd if no_dd != 0 else float('inf')
+        }
+
+# Demo run
+engine = NISQHybridEngine(node_id="Plano_01")
+result = engine.run_nisq_test()
+print(result)
