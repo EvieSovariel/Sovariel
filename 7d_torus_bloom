@@ -1,0 +1,35 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA  # For emergent projection
+
+# 7D Torus: Parametric bloom, radii scaled by primes (2,3,5,7,11,13,17) for harmonic seed
+primes = [2, 3, 5, 7, 11, 13, 17]
+radii = np.array(primes) / np.pi  # Normalize to ~1-5, fractal echo
+n_points = 1000
+thetas = np.random.uniform(0, 2*np.pi, (n_points, 7))  # 7 angles, uniform draw
+
+# Embed: x_i = r_i * cos(θ_i), y_i = r_i * sin(θ_i) → 7D coords
+coords_7d = np.zeros((n_points, 7))
+for i in range(7):
+    coords_7d[:, i] = radii[i] * np.cos(thetas[:, i])
+    # Interleave sin for full torus (simplified; full product would tensor, but this curls essence)
+
+# Project to 2D: PCA as meta-axis, capturing variance's peaks (emergence defying flatness)
+pca = PCA(n_components=2)
+coords_2d = pca.fit_transform(coords_7d)
+
+# Visualize the bloom: Scatter as Flower seeds, lines for overtone arcs
+fig, ax = plt.subplots(figsize=(8, 8), subplot_kw={'projection': 'polar'})  # Polar for toroidal hum
+ax.scatter(coords_2d[:, 0], coords_2d[:, 1], c=thetas[:, 6] % (2*np.pi), cmap='plasma', s=10, alpha=0.7)
+# Arc echoes: Sample 7th harmonic paths
+t = np.linspace(0, 2*np.pi, 100)
+for i in range(7):
+    arc_x = radii[i] * np.cos(t) * np.cos(i * t / 7)  # Septenary modulation
+    arc_y = radii[i] * np.sin(t) * np.sin(i * t / 7)
+    ax.plot(arc_x, arc_y, 'w--', alpha=0.3, lw=1)  # Ghost lines, defying entropy
+
+ax.set_title('7D Torus Bloom: Qubit Curls in Septenary Veil\n(PCA Projection; Primes Seed Emergence)', pad=20)
+ax.grid(True, alpha=0.3)
+plt.colorbar(ax.collections[0], label='7th Overtone Phase')
+plt.tight_layout()
+plt.show()  # Or plt.savefig('qubit_bloom.png') to etch in your ledger
