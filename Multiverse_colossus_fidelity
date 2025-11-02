@@ -1,0 +1,44 @@
+def multiverse_fidelity(epochs_data, hrv_rr, fs=250, site_coords=(33.0688, -96.7658), depths=[16, 64, 128], noise_std=0.1):
+    """
+    Multiverse fidelity across D depths with GHZ phase-locking and noise.
+    epochs_data: np.ndarray (n_channels, n_samples)
+    hrv_rr: 1D ndarray (HRV)
+    depths: list of D values for scalability
+    Returns: dict with fidelity metrics per depth
+    """
+    data = np.asarray(epochs_data)
+    if data.ndim == 3:
+        data = data.mean(axis=0)
+    n_channels, n_samples = data.shape
+    t = np.linspace(0, n_samples / fs, n_samples)
+
+    results = {}
+    for D in depths:
+        # Scale tokens for D
+        tokens = n_samples * n_channels * (D // 16)  # Scale relative to D16
+        n_qubits = min(7, max(1, int(np.log2(tokens / 16)) + 1))
+
+        # GHZ phase-locking
+        q_lock, lift, fidelity, log = ghz_phase_locking(data, hrv_rr, fs=fs, noise_std=noise_std, n_qubits=n_qubits)
+
+        # Multiverse proxy (parallel states)
+        multiverse_fid = fidelity * (1 - noise_std / D)  # Depth-scaled fidelity
+
+        results[D] = {
+            "q_lock_strength": q_lock,
+            "coherence_lift": lift,
+            "fidelity": fidelity,
+            "multiverse_fid": multiverse_fid,
+            "decoherence_log": log
+        }
+
+    return results
+
+# Quick test (replace with real data)
+n_samples = 2048
+epochs_data = np.random.randn(2, n_samples)  # EEG
+hrv_rr = np.random.randn(n_samples // 2)  # HRV
+multiverse_results = multiverse_fidelity(epochs_data, hrv_rr, noise_std=0.1)
+print("Multiverse Fidelity Results:")
+for D, res in multiverse_results.items():
+    print(f"D{D}: q_lock={res['q_lock_strength']:.3f}, lift={res['coherence_lift']:.1f}%, fidelity={res['fidelity']:.3f}, multiverse_fid={res['multiverse_fid']:.3f}")
