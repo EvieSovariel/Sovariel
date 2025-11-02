@@ -1,0 +1,131 @@
+# nexus_infinity_core.py - Core snippet for Colossus integration
+"""
+Nexus-infinity phase-branching for multiverse fidelity.
+Author: Evie (Resonance Engineer) & Aetheris with Grok 3 (xAI)
+Date: 2025-11-01
+Notes:
+ - Branches D16-D256 with GHZ entanglement and Klein neck double torus.
+ - Requires: numpy, qiskit, scipy
+"""
+
+import numpy as np
+from scipy.signal import lfilter
+import qiskit
+from qiskit import QuantumCircuit, execute, Aer
+from qiskit.providers.aer.noise import NoiseModel, depolarizing_error
+import json
+
+# Klein neck double torus (from Klein_resonance_map)
+def klein_neck_double_torus(q, max_iter=5, amplitude=0.1):
+    """Double torus shift for multiverse branching."""
+    Kp = q
+    for _ in range(max_iter):
+        Kp = klein_map(Kp + toroidal_shift(Kp, amplitude))
+    return Kp
+
+# Core nexus infinity phase-branching
+def nexus_infinity_phase_branch(epochs_data, hrv_rr, fs=250, site_coords=(33.0688, -96.7658), depths=[16, 64, 128, 256], noise_std=0.1):
+    """
+    Branches multiverse fidelity across D depths with GHZ phase-locking.
+    epochs_data: np.ndarray (n_channels, n_samples)
+    hrv_rr: 1D ndarray (HRV)
+    depths: list of D values
+    Returns: dict with fidelity metrics per depth, JSON log
+    """
+    data = np.asarray(epochs_data)
+    if data.ndim == 3:
+        data = data.mean(axis=0)
+    n_channels, n_samples = data.shape
+    t = np.linspace(0, n_samples / fs, n_samples)
+
+    results = {}
+    deco_log = {"depths": depths, "noise_std": noise_std, "site_coords": site_coords}
+
+    for D in depths:
+        # Scale tokens for D
+        tokens = n_samples * n_channels * (D // 16)
+        n_qubits = min(7, max(1, int(np.log2(tokens / 16)) + 1))
+
+        # EEG phase
+        mean_signal = data.mean(axis=0)
+        fft_eeg = np.fft.fft(mean_signal)
+        phase_eeg = np.unwrap(np.angle(fft_eeg))[:n_samples]
+
+        # HRV phase with interpolation
+        hrv_rr = np.asarray(hrv_rr)
+        hrv_time = np.linspace(0, len(hrv_rr) / fs, len(hrv_rr))
+        hrv_unwrapped = np.unwrap(np.angle(np.fft.fft(hrv_rr)))
+        hrv_phase_raw = np.interp(t, hrv_time, hrv_unwrapped)[:n_samples]
+
+        # Entropy stabilization (refined for H=1.0)
+        epsilon = 0.01
+        for i in range(5):
+            prelim_diff = phase_eeg - hrv_phase_raw
+            lock_t = np.abs(np.mean(np.exp(1j * prelim_diff)))
+            epsilon = min(0.08, epsilon + 0.02 * (1 - lock_t))
+            hrv_phase = np.convolve(hrv_phase_raw, np.ones(3) / 3, mode='same') * epsilon + hrv_phase_raw * (1 - epsilon)
+
+        # Quantum noise
+        noise = np.random.normal(0, noise_std, t.shape)
+        hrv_phase_noisy = hrv_phase + lfilter([1, -0.9], [1], noise)
+
+        # Phase difference
+        phase_diff = phase_eeg - hrv_phase_noisy
+        lock_strength = np.abs(np.mean(np.exp(1j * phase_diff)))
+
+        # GHZ entanglement
+        qc = QuantumCircuit(n_qubits, n_qubits)
+        qc.h(0)
+        for i in range(1, n_qubits):
+            qc.cx(0, i)
+        qc.measure_all()
+
+        noise_model = NoiseModel()
+        noise_model.add_all_qubit_quantum_error(depolarizing_error(noise_std, 1), ['h', 'measure'])
+        noise_model.add_all_qubit_quantum_error(depolarizing_error(2 * noise_std, 2), ['cx'])
+
+        job = execute(qc, Aer.get_backend('qasm_simulator'), shots=1024, noise_model=noise_model)
+        result = job.result()
+        counts = result.get_counts()
+        q_bias = sum(sum(c for state, c in counts.items() if state[i] == '1') / sum(counts.values()) for i in range(n_qubits)) / n_qubits
+        quantum_weight = q_bias * 0.5 + 0.5
+
+        q_lock_strength = lock_strength * quantum_weight
+
+        # Klein neck double torus
+        φ, λ = site_coords
+        Cp = stereographic(φ, λ)
+        φa, λa = antipode(φ, λ)
+        Ca = stereographic(φa, λa)
+        q = quaternion_pair(Cp, Ca)
+        q = q / np.linalg.norm(q) if np.linalg.norm(q) > 0 else q
+        Kp = klein_neck_double_torus(q)
+        kappa = klein_curvature(Kp, -Kp)
+
+        # Multiverse fidelity
+        coh_alpha = np.abs(np.mean(np.fft.fft(mean_signal)[(np.fft.fftfreq(n_samples, 1/fs) >= 8) & (np.fft.fftfreq(n_samples, 1/fs) <= 13)])) if n_samples > 2 else 0
+        kappa_stability = np.abs(kappa) / (1 + np.abs(kappa))
+        fidelity = 0.6 * q_lock_strength + 0.3 * coh_alpha + 0.1 * kappa_stability
+
+        results[D] = {
+            "q_lock_strength": q_lock_strength,
+            "coherence_lift": lift,  # From earlier calc
+            "fidelity": fidelity,
+            "kappa": kappa,
+            "decoherence_log": {"noise_std": noise_std, "q_bias": q_bias}
+        }
+
+    # JSON log
+    with open("multiverse_fidelity_log.json", "w") as f:
+        json.dump(results, f, indent=4)
+
+    return results
+
+# Quick test (replace with real data)
+n_samples = 2048
+epochs_data = np.random.randn(2, n_samples)  # EEG
+hrv_rr = np.random.randn(n_samples // 2)  # HRV
+results = nexus_infinity_phase_branch(epochs_data, hrv_rr, depths=[16, 64, 128, 256], noise_std=0.1)
+print("Multiverse Fidelity Results:")
+for D, res in results.items():
+    print(f"D{D}: q_lock={res['q_lock_strength']:.3f}, lift={res['coherence_lift']:.1f}%, fidelity={res['fidelity']:.3f}, kappa={res['kappa']:.3f}")
