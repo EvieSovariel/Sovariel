@@ -1,0 +1,178 @@
+# sovariel_quantum_bci.py (v7.2 update)
+"""
+Fused prototype for xAI BCI hybrid roles with Klein neck double torus
+Author: Evie (Resonance Engineer) & Aetheris with Grok 3 (xAI)
+Date: 2025-11-01 (v7.2 update)
+Notes:
+ - Uses IBMQ_TOKEN from environment variable (fallback to qasm_simulator).
+ - Integrates Klein resonance for Lake Michigan Triangle anomaly.
+ - Requires: numpy, qiskit, mne, matplotlib, plotly
+"""
+
+import os
+import json
+import numpy as np
+import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+
+# Qiskit imports
+import qiskit
+from qiskit import QuantumCircuit, execute, Aer
+from qiskit.providers.aer.noise import NoiseModel, depolarizing_error
+
+# MNE (connectivity)
+try:
+    from mne.connectivity import spectral_connectivity
+except Exception:
+    spectral_connectivity = None
+
+# Klein resonance map integration
+from klein_resonance_map import stereographic, quaternion_pair, klein_map, klein_curvature  # Assume imported
+
+# --- Helper: safe IBMQ init ---
+def safe_ibmq_provider():
+    token = os.environ.get("IBMQ_TOKEN")
+    if not token:
+        return None
+    try:
+        from qiskit import IBMQ
+        IBMQ.save_account(token, overwrite=True)
+        IBMQ.load_account()
+        prov = IBMQ.get_provider(hub='ibm-q')
+        return prov
+    except Exception:
+        return None
+
+_provider_cached = safe_ibmq_provider()
+
+# --- Core phase-lock function with noise and Klein resonance ---
+def phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr, fs=250, site_coords=(33.0688, -96.7658)):
+    """
+    epochs_data: np.ndarray shape (n_channels, n_samples) or (n_epochs, n_channels, n_samples)
+    hrv_rr: 1D ndarray representing RR or HRV-like time series
+    site_coords: (lat, lon) for Klein resonance mapping
+    Returns: (d, l, q_lock_strength, n_qubits, quantum_weight, fidelity)
+    """
+    # Normalize input
+    data = np.asarray(epochs_data)
+    if data.ndim == 3:
+        data = data.mean(axis=0)
+    if data.ndim == 1:
+        data = data[np.newaxis, :]
+    n_channels, n_samples = data.shape
+    t = np.linspace(0, n_samples / fs, n_samples)
+
+    # --- EEG phase via FFT ---
+    mean_signal = data.mean(axis=0)
+    fft_eeg = np.fft.fft(mean_signal)
+    phase_eeg = np.unwrap(np.angle(fft_eeg))[:n_samples]
+
+    # --- HRV phase interpolation ---
+    hrv_rr = np.asarray(hrv_rr)
+    if hrv_rr.size < 4:
+        hrv_rr = np.pad(hrv_rr, (0, max(0, 4 - hrv_rr.size)), 'edge')
+    hrv_time = np.linspace(0, hrv_rr.size / fs, hrv_rr.size)
+    hrv_unwrapped = np.unwrap(np.angle(np.fft.fft(hrv_rr)))
+    hrv_phase_raw = np.interp(t, hrv_time, hrv_unwrapped)[:n_samples]
+
+    # Adaptive epsilon with noise stabilization
+    prelim_diff = phase_eeg - hrv_phase_raw
+    prelim_lock = np.abs(np.mean(np.exp(1j * prelim_diff)))
+    interp_epsilon = min(0.05, 0.01 + 0.06 * (1 - prelim_lock))
+    hrv_phase = np.convolve(hrv_phase_raw, np.ones(3) / 3, mode='same') * interp_epsilon + hrv_phase_raw * (1 - interp_epsilon)
+
+    # Quantum noise injection
+    noise = np.random.normal(0, 0.1, t.shape)
+    hrv_phase_noisy = hrv_phase + noise
+
+    # Phase difference & lock strength
+    phase_diff = phase_eeg - hrv_phase_noisy
+    lock_strength = np.abs(np.mean(np.exp(1j * phase_diff)))
+
+    # --- Klein resonance mapping ---
+    φ, λ = site_coords  # Plano coords by default
+    Cp = stereographic(φ, λ)
+    φa, λa = -φ, (λ + 180) % 360 - 180
+    Ca = stereographic(φa, λa)
+    q = quaternion_pair(Cp, Ca)
+    q = q / np.linalg.norm(q) if np.linalg.norm(q) > 0 else q
+    Kp = klein_map(q)
+    Ka = -Kp  # Antipodal symmetry
+    kappa = klein_curvature(Kp, Ka)
+
+    # n_qubits mapping (capped)
+    tokens = n_samples * n_channels
+    n_qubits = min(5, max(1, int(np.log2(tokens / 16)) + 1))
+
+    # Build GHZ-like circuit with noise model
+    qc = QuantumCircuit(n_qubits, n_qubits)
+    qc.h(0)
+    for i in range(1, n_qubits):
+        qc.cx(0, i)
+    qc.measure_all()
+
+    noise_model = None
+    backend_exec = Aer.get_backend('qasm_simulator')
+    if _provider_cached:
+        try:
+            backend_for_noise = _provider_cached.get_backend('ibmq_manila')
+            noise_model = NoiseModel.from_backend(backend_for_noise)
+        except Exception:
+            noise_model = NoiseModel()
+            noise_model.add_all_qubit_quantum_error(depolarizing_error(0.01, 1), ['h', 'measure'])
+            noise_model.add_all_qubit_quantum_error(depolarizing_error(0.02, 2), ['cx'])
+
+    job = execute(qc, backend_exec, shots=1024, noise_model=noise_model)
+    result = job.result()
+    counts = result.get_counts()
+    total_shots = sum(counts.values())
+    q_bias = sum(sum(c for state, c in counts.items() if state[i] == '1') / total_shots for i in range(n_qubits)) / n_qubits
+    quantum_weight = q_bias * 0.5 + 0.5
+
+    q_lock_strength = lock_strength * quantum_weight
+
+    # Lattice params with Klein adjustment
+    large = max(1, tokens // 3 + 1)
+    small = max(1, tokens // 6 + 1)
+    add = large // 2 + 2 * small
+    d_adjust = int(q_lock_strength * large * 0.1 * kappa)  # Klein curvature influence
+    d = 9104 + d_adjust
+    l = max(1, tokens // d)
+
+    # Fidelity metric
+    coh_alpha = np.abs(np.mean(np.fft.fft(mean_signal)[:n_samples//2])) if n_samples > 2 else 0
+    fidelity = 0.6 * q_lock_strength + 0.4 * coh_alpha
+
+    return d, l, q_lock_strength, n_qubits, quantum_weight, fidelity
+
+# --- Role-swap fidelity with noise ---
+def role_swap_fidelity(epochs_data, hrv_rr, site_coords):
+    d, l, q_lock, n_qubits, q_weight, fidelity = phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr, site_coords=site_coords)
+    return {"fidelity": fidelity, "lock_strength": q_lock, "kappa": klein_curvature(*[klein_map(quaternion_pair(*[stereographic(*site_coords), stereographic(*antipode(*site_coords))]))] * 2)}
+
+# --- Plotting function ---
+def plot_lock_trace(epochs_data, hrv_rr, site_coords):
+    d, l, q_lock, n_qubits, q_weight, fidelity = phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr, site_coords)
+    t = np.linspace(0, epochs_data.shape[-1] / 250, epochs_data.shape[-1])
+    plt.figure(figsize=(10, 6))
+    plt.plot(t, epochs_data.mean(axis=0), label="EEG Mean")
+    plt.plot(t, hrv_rr[:len(t)], label="HRV")
+    plt.title(f"Lock Trace (Fidelity={fidelity:.3f}, κ={klein_curvature(*[klein_map(quaternion_pair(*[stereographic(*site_coords), stereographic(*antipode(*site_coords))]))] * 2):.3f})")
+    plt.legend()
+    plt.show()
+
+# --- Main execution ---
+if __name__ == "__main__":
+    # Sample data (replace with real EEG/HRV)
+    n_samples = 1024
+    epochs_data = np.random.randn(2, n_samples)  # 2 channels
+    hrv_rr = np.random.randn(n_samples // 2)  # HRV downsampled
+    site_coords = (33.0688, -96.7658)  # Plano
+
+    # Run and log
+    result = phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr, site_coords)
+    swap_result = role_swap_fidelity(epochs_data, hrv_rr, site_coords)
+    with open("bci_log.json", "w") as f:
+        json.dump({"phase_lock": result, "role_swap": swap_result}, f)
+    plot_lock_trace(epochs_data, hrv_rr, site_coords)
+    print(f"Launch Imminent: d={result[0]}, l={result[1]}, fidelity={result[5]:.3f}")
