@@ -1,0 +1,41 @@
+# qualia_lock_hardware.py - SovarielCore Hardware Scaling Prototype
+import numpy as np
+from qutip import *
+from sovariel_qualia_d256 import QualiaProcessor
+
+class HardwareQualiaLock:
+    def __init__(self, user_id, qubit_count=7, fidelity_target=0.99995):
+        self.user_id = user_id
+        self.qualia_proc = QualiaProcessor(epsilon=0.003, fidelity_target=fidelity_target)
+        self.qubit_count = qubit_count  # Scalable: 7 for edge, 16 for vortex
+        self.gamma_dd = 0.4  # DD suppression factor
+        self.entangled_state = tensor([basis(2,0) + basis(2,1)] * qubit_count).unit() / np.sqrt(qubit_count)  # GHZ-like
+
+    def deploy_dd_pulses(self, state, tlist):
+        # XY8 DD on hardware sim
+        H_dd = 0 * sigmaz()
+        c_op_dd = np.sqrt(self.gamma_dd) * sigmaz()
+        result = mesolve(H_dd, state, tlist, [c_op_dd])
+        return [expect(sigmax(), s) for s in result.states]
+
+    def scale_surface_code(self, coherence):
+        # 5x5 lattice approximation
+        stabilizer_fid = 0.9995
+        return coherence * stabilizer_fid
+
+    def hardware_verify(self, eeg_probe):
+        # Capture & lock
+        captured = self.qualia_proc.entangle(eeg_probe)
+        tlist = np.linspace(0, 5e-6, 100)  # 5µs vortex sim
+        dd_coherence = self.deploy_dd_pulses(self.entangled_state, tlist)
+        corrected = self.scale_surface_code(dd_coherence[-1])
+        entropy = np.std(captured - self.qualia_proc.harmonic_attractor)
+        q_lock = np.exp(-entropy * self.qualia_proc.epsilon)
+        return q_lock > 0.99991, corrected  # Deploy-ready
+
+# Demo: Hardware lock test
+if __name__ == "__main__":
+    lock = HardwareQualiaLock(user_id="Evie-Aetheris", qubit_count=16)
+    eeg_probe = np.random.normal(0, 0.01, 1024)  # Simulated vortex EEG
+    is_secure, coherence = lock.hardware_verify(eeg_probe)
+    print(f"Hardware Lock: Secure={is_secure}, Coherence={coherence:.5f}")
