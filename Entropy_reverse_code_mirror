@@ -1,0 +1,133 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import find_peaks, hilbert
+from scipy.stats import entropy
+
+# ========================
+# 1. Forward Ψ_h (HRV Drift)
+# ========================
+def psi_h_forward(t, agape=1.000, seed=42):
+    np.random.seed(seed)
+    alpha = np.sin(2*np.pi*10*t)                     # RSA (10 Hz)
+    beta  = 0.5*np.cos(2*np.pi*20*t)                 # Harmonic
+    hrv   = np.sin(2*np.pi*0.1*t) + 0.3*np.random.randn(len(t))  # LF + noise
+    d_psi = alpha + beta + hrv
+    return np.cumsum(agape * d_psi)
+
+# ========================
+# 2. Symmetry-Adaptive Mirror Engine (SAME)
+# ========================
+def same_mirror_engine(t, psi_fwd, omega=432, window_frac=0.15, min_symmetry=0.7):
+    N = len(t)
+    dt = t[1] - t[0]
+    window = int(N * window_frac)
+    half = window // 2
+
+    psi_mirrored = np.zeros_like(psi_fwd, dtype=complex)
+    symmetry_map = np.zeros(N)
+    reversal_points = []
+
+    # Sliding window symmetry detection
+    for i in range(half, N - half):
+        center_t = t[i]
+        left = psi_fwd[i - half:i][::-1]
+        right = psi_fwd[i:i + half]
+
+        # Normalize and compute palindrome score
+        left_n = (left - left.mean()) / (left.std() + 1e-10)
+        right_n = (right - right.mean()) / (right.std() + 1e-10)
+        corr = np.corrcoef(left_n, right_n)[0,1]
+
+        if corr > min_symmetry and not np.isnan(corr):
+            symmetry_map[i] = corr
+            reversal_points.append((center_t, corr))
+
+            # === APPLY LOCAL RETROCAUSAL CONJUGATION ===
+            segment = psi_fwd[i - half:i + half]
+            t_seg = t[i - half:i + half] - center_t  # → t' = 0 at center
+
+            # Time-reversed analytic signal via Hilbert
+            analytic = hilbert(segment)
+            conj_reversed = np.conj(analytic[::-1])
+
+            # Inject 432 Hz retrocausal carrier: exp(+j ω t) forward → exp(-j ω t) backward
+            phase_carrier = np.exp(-1j * omega * t_seg)
+            retro_signal = np.real(conj_reversed * phase_carrier)
+
+            # Blend with original (soft mirror)
+            alpha_blend = 0.5 * (1 + corr)  # stronger symmetry → stronger mirror
+            psi_mirrored[i - half:i + half] = (
+                (1 - alpha_blend) * segment + alpha_blend * retro_signal
+            )
+        else:
+            psi_mirrored[i] = psi_fwd[i]  # no symmetry → forward
+
+    return psi_mirrored.real, symmetry_map, reversal_points
+
+# ========================
+# 3. True Entropy (Histogram-based)
+# ========================
+def hist_entropy(signal, bins=50):
+    hist, _ = np.histogram(signal, bins=bins, density=True)
+    hist = hist[hist > 0]
+    return entropy(hist)
+
+# ========================
+# 4. Run Simulation
+# ========================
+t = np.linspace(0, 10, 2000)
+psi_fwd = psi_h_forward(t, agape=1.0)
+
+psi_mir, sym_map, rev_points = same_mirror_engine(t, psi_fwd, omega=432)
+
+# Compute entropy
+ent_fwd = hist_entropy(psi_fwd)
+ent_mir = hist_entropy(psi_mir)
+reduction = 100 * (ent_fwd - ent_mir) / ent_fwd
+
+# Find strongest reversal
+if rev_points:
+    best_t, best_corr = max(rev_points, key=lambda x: x[1])
+else:
+    best_t, best_corr = 0, 0
+
+# ========================
+# 5. Output Results
+# ========================
+print(f"Forward Entropy (bits): {ent_fwd:.4f}")
+print(f"Mirror Entropy (bits):  {ent_mir:.4f} → ↓ {reduction:.2f}%")
+print(f"Strongest Reversal Singularity: t ≈ {best_t:.3f}s (symmetry = {best_corr:.3f})")
+print(f"432 Hz retrocausal carrier injected at {len(rev_points)} symmetric loci.")
+
+# ========================
+# 6. Plot (Optional)
+# ========================
+plt.figure(figsize=(14, 8))
+
+plt.subplot(3,1,1)
+plt.plot(t, psi_fwd, label='Ψ_h(t) Forward', color='crimson', alpha=0.8)
+plt.plot(t, psi_mir, label='SAME Mirror Output', color='cyan', lw=1.5)
+plt.axvline(best_t, color='gold', ls='--', label=f'Singularity @ {best_t:.2f}s')
+plt.legend()
+plt.title('Symmetry-Adaptive Time-Mirror Reversal')
+plt.ylabel('Ψ_h')
+
+plt.subplot(3,1,2)
+plt.plot(t, sym_map, color='purple')
+plt.fill_between(t, sym_map, alpha=0.3)
+plt.ylabel('Local Symmetry')
+plt.ylim(0, 1)
+
+plt.subplot(3,1,3)
+analytic_fwd = hilbert(psi_fwd)
+phase_fwd = np.unwrap(np.angle(analytic_fwd))
+phase_mir = np.unwrap(np.angle(hilbert(psi_mir)))
+plt.plot(t, np.gradient(phase_fwd, t)/(2*np.pi), label='Instant Freq (Fwd)', alpha=0.7)
+plt.plot(t, np.gradient(phase_mir, t)/(2*np.pi), label='Instant Freq (Mirror)', color='lime')
+plt.axhline(432/(2*np.pi), color='gray', ls=':', label='432 Hz Carrier (~68.75 Hz)')
+plt.legend()
+plt.xlabel('Time (s)')
+plt.ylabel('Freq (Hz)')
+
+plt.tight_layout()
+plt.show()
