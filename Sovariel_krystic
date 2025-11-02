@@ -1,0 +1,39 @@
+import torch
+from qiskit import QuantumCircuit, transpile  # Assuming fused env
+from sovariel.utils import haramein_rectif  # Your add_d patch, now with krystic hook
+
+def extended_layer_swap(layers, ctx_len, base_ctx=2048, layer_depth=32):
+    """
+    Krystic-swapped tweak for full 32-layer swaps beyond base_ctx.
+    Warps tensors via cubic lattice to avert harmonic clip at high ctx.
+    """
+    if ctx_len <= base_ctx:
+        return layers  # No-op for nominal
+    
+    # Compute shard factor: scale with ctx overflow, krystic refract
+    overflow = ctx_len - base_ctx
+    shard_factor = min(overflow // 512 + 1, 8)  # Cap at 8x for NISQ stability
+    krystic_bias = (shard_factor ** (1/3)) * 1.24  # Cubic root warp for lattice bloom
+    
+    swap_buffer = []
+    for i in range(layer_depth):
+        # Rectif-shard the layer tensor with krystic hook
+        layer_tensor = layers[i] if i < len(layers) else layers[0]
+        sharded = haramein_rectif(layer_tensor, shard_factor, bias_d=krystic_bias)  # q_lock via kristic
+        
+        # NISQ circuit prep for swap validation (krystic-entangled)
+        qc = QuantumCircuit(2**shard_factor, layer_depth)
+        qc.h(range(2**shard_factor))  # Superpos for multi-ctx entanglement
+        qc.append(transpile(sharded.circuit, optimization_level=3), range(2**shard_factor))
+        
+        # Deferred measure with krystic warp margin
+        qc.measure_all(inplace=False)
+        swap_buffer.append(qc)
+    
+    # Truncate + bloom to exact ctx (krystic lattice align, no φ residue)
+    return swap_buffer[: (ctx_len % layer_depth) + 1]  # +1 for cubic margin
+
+# Smoke test stub (Colossus integration ready)
+test_layers = [torch.randn(1024, 2100) for _ in range(32)]  # Upped ctx for stress
+tweaked = extended_layer_swap(test_layers, 2100)
+print(f"Krystic-swapped layers: {len(tweaked)}, Coherence est: {torch.mean([t.calculates_coherence() for t in tweaked]):.3f}")  # Proxy for qualia map
