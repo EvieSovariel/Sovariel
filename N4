@@ -1,0 +1,73 @@
+import qutip as qt
+import numpy as np
+# Optional: import matplotlib.pyplot as plt for viz
+
+# Parameters: Tune g (MHz->rad/µs), γ dephasing, κ phonon damp, t-span
+N = 4  # NV spins
+g = 0.5 * 2 * np.pi  # Coupling strength
+gamma = 0.001 * 2 * np.pi  # Dephasing rate (µs^-1)
+kappa = 1.0 * 2 * np.pi  # Phonon damping (µs^-1)
+tlist = np.linspace(0, 10, 1000)  # Evolution times (µs)
+dim_ph = 10  # Truncated phonon Hilbert (Fock |0> to |9>)
+
+# Spin operators: σ_z, σ_x for each NV
+Id = qt.qeye(2)
+sz_list = [qt.tensor([Id]*i + [qt.sigmaz()] + [Id]*(N-i-1)) for i in range(N)]
+sx_list = [qt.tensor([Id]*i + [qt.sigmax()] + [Id]*(N-i-1)) for i in range(N)]
+
+# Phonon ops
+a = qt.destroy(dim_ph)
+I_ph = qt.qeye(dim_ph)
+I_spins = qt.tensor([Id for _ in range(N)])  # Structured spin identity
+
+# H_int: g Σ σ_z^i ⊗ (a + a†) — strain-mediated longitudinal whirl
+H_int_terms = [qt.tensor(sz_list[i], a + a.dag()) for i in range(N)]
+H_int = g * sum(H_int_terms)
+
+# Initial: Product |+⟩^N spins (|0⟩ + |1⟩)/√2, |0⟩ phonon — equatorial superposition
+plus = (qt.basis(2, 0) + qt.basis(2, 1)).unit()
+psi_spins = qt.tensor([plus] * N)
+psi_ph = qt.fock(dim_ph, 0)
+psi0 = qt.tensor(psi_spins, psi_ph)
+rho0 = psi0 * psi0.dag()  # Pure density
+
+# Seed pulse: Collective RX(π/2) — strums all spins to resonant plane (phase-trivial here)
+theta = np.pi / 2
+U_spin = (-1j * (theta / 2) * sum(sx_list)).expm()
+U_full = qt.tensor(U_spin, I_ph)
+rho0 = U_full * rho0 * U_full.dag()
+
+# Lindblad dissipators: Per-spin dephasing + phonon leak
+c_ops_deph = [np.sqrt(gamma) * qt.tensor(sz_list[i], I_ph) for i in range(N)]
+c_ops_ph = [np.sqrt(kappa) * qt.tensor(I_spins, a)]
+c_ops = c_ops_deph + c_ops_ph
+
+# Evolve: Master eq. cascade
+result = qt.mesolve(H_int, rho0, tlist, c_ops=c_ops, progress_bar=True)
+
+# Probe: GHZ fid & von Neumann S (spin sub—entanglement metric w/ phonon)
+basis0 = qt.tensor([qt.basis(2, 0)] * N)
+basis1 = qt.tensor([qt.basis(2, 1)] * N)
+ghz = (basis0 + basis1).unit()
+rho_ghz = ghz * ghz.dag()
+
+fids, entropies = [], []
+for rho_t in result.states:
+    rho_spin = rho_t.ptrace(list(range(N)))  # Trace phonon
+    fid = qt.fidelity(rho_spin, rho_ghz)**2
+    fids.append(fid)
+    S = qt.entropy_vn(rho_spin)
+    entropies.append(S)
+
+# Harvest: Maxima & logs
+idx_max_fid = np.argmax(fids)
+print(f"Max GHZ fid: {fids[idx_max_fid]:.5f} at t={tlist[idx_max_fid]:.3f} µs")
+print(f"Max S_vN (spins-ph ent): {max(entropies):.5f} nats (~{max(entropies)/np.log(2):.2f} bits)")
+print(f"ΔS gain: {max(entropies) - entropies[0]:.3f} nats ({(max(entropies)/np.log(2**N))*100:.1f}% of max log(2^N))")
+
+# Viz hook: Plot fid & S vs t (uncomment)
+# plt.plot(tlist, fids, label='GHZ Fid'); plt.plot(tlist, entropies, label='S_vN')
+# plt.xlabel('Time (µs)'); plt.legend(); plt.show()
+
+# Cascade tweak: For DD (e.g., XY16), interleave free evo + pulses in custom solver or approx.
+# Scale N=10^12? Chunk to clusters, superradiant Γ ~ √N γ.
