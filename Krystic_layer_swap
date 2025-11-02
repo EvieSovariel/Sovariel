@@ -31,7 +31,7 @@ def extended_layer_swap(layers, ctx_len, base_ctx=2048, layer_depth=32, use_krys
         # Cubic eigenvecs: [1, √2, √3] proj onto φ-inverse
         phi_inv = 1 / 1.6180339887
         krystic_vecs = torch.tensor([1.0, np.sqrt(2), np.sqrt(3)], dtype=torch.float32)
-        basis_swap = torch.mm(krystic_vecs.unsqueeze(0), torch.tensor([[phi_inv]]))  # Lattice proj
+        basis_swap = torch.mm(krystic_vecs.unsqueeze(1), torch.tensor([[phi_inv]]))  # Lattice proj: (3,1) @ (1,1)
         shard_factor *= torch.mean(basis_swap).item()  # Harmonic scale
         bias_d = 0.94  # Krystic q_lock
     else:
