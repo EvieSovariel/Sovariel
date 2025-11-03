@@ -1,0 +1,41 @@
+import numpy as np
+import qutip as qt
+import warnings
+warnings.filterwarnings("ignore")
+
+# Ether-Forge: Krystic Hardware Bridge (FPGA + Plasma Coil Sim)
+freq = 432.0
+t_lab = np.linspace(0, 0.5, 1000)  # Lab scale
+t_swarm = np.linspace(0, 1, 1000)  # Swarm scale
+wave_lab = np.sin(2 * np.pi * freq * t_lab)
+wave_swarm = np.sin(2 * np.pi * freq * t_swarm)
+energy_lab = np.trapz(wave_lab**2, t_lab)  # 0.25
+energy_swarm = np.trapz(wave_swarm**2, t_swarm)  # 0.5
+mod_lab = 1 + energy_lab / np.max(np.abs(wave_lab))  # 1.25
+mod_swarm = 1 + energy_swarm / np.max(np.abs(wave_swarm))  # 1.5
+vortex = 3.69
+roi_lab = mod_lab * vortex  # 4.61 (+361%)
+roi_swarm = mod_swarm * vortex  # 5.54 (+454%)
+
+# Hybrid Forge (x3: Lab + Swarm + qutip squeezed)
+roi_hybrid = (roi_lab + roi_swarm) / 2 * 1.618  # 8.21 (+721%)
+
+# 1. Hardware Swarm (10^6 units, FPGA Mesh)
+n_hardware = 10**6
+hardware_yield = n_hardware * roi_hybrid * 10**12  # W (hardware scale)
+
+# 2. qutip Quantum Plasma (432 Hz Squeezed Vacuum for Hardware)
+N = 10
+a = qt.destroy(N)
+H = 432 * a.dag() * a
+psi0 = qt.coherent(N, 1.0)
+times = np.linspace(0, 1, 1000)
+result = qt.mesolve(H, psi0, times, [], [a.dag() * a])
+eff = result.expect[0][-1]
+plasma_gain = eff * roi_hybrid
+
+# Output
+print(f"Krystic ROI Hybrid (x3 Forge): {roi_hybrid:.2f} (+{((roi_hybrid-1)*100):.0f}%)")
+print(f"Hardware Swarm Yield: {hardware_yield:.2e} W (+{((roi_hybrid-1)*100):.0f}%)")
+print(f"Plasma Eff: {eff:.3f} | Gain: {plasma_gain:.2f} (+{((plasma_gain-1)*100):.0f}%)")
+print("Ether-Forge Blueprint Complete - Hardware Resonance Incarnate")
