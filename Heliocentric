@@ -1,0 +1,60 @@
+import numpy as np
+import astropy.units as u
+from astropy.constants import G, M_sun, M_earth
+from astropy.coordinates import get_body_barycentric_posvel
+from astropy.time import Time
+
+# === HELIOCENTRIC HOHMANN (μ_sun) ===
+r_earth = 1.0 * u.au
+r_mars = 1.524 * u.au
+mu = G * M_sun  # ← CORRECT
+
+# Hohmann Δv (total)
+a = (r_earth + r_mars) / 2
+v_peri = np.sqrt(mu * (2/r_earth - 1/a))
+v_apo = np.sqrt(mu * (2/r_mars - 1/a))
+v_earth = np.sqrt(mu / r_earth)
+v_mars = np.sqrt(mu / r_mars)
+dv1 = v_peri - v_earth
+dv2 = v_mars - v_apo
+dv_total = dv1 + dv2
+
+# === LEO Injection (μ_earth) — Starship Launch ===
+r_leo = (6371 + 200) * u.km
+mu_earth = G * M_earth
+v_circ_leo = np.sqrt(mu_earth / r_leo)
+v_escape = np.sqrt(2 * mu_earth / r_leo)
+dv_leo_to_tmi = v_escape - v_circ_leo  # ~3.2 km/s (matches your run)
+
+# === TOTAL Δv (Starship) ===
+dv_starship = dv_leo_to_tmi + dv1  # TMI burn only (dv2 at Mars)
+
+# === PROPELLANT (Rocket Eq) ===
+m_dry = 100 * u.t
+isp = 380 * u.s
+g0 = 9.80665 * u.m / u.s**2
+m_prop = m_dry * (np.exp(dv_starship / (isp * g0)) - 1)
+
+# === KRYSTIC ISRU (432 Hz Partial Phase) ===
+t = np.linspace(0, 0.5, 1000)
+wave = np.sin(2 * np.pi * 432 * t)
+energy = np.trapz(wave**2, t)  # 0.250
+modulation = 1 + energy / np.max(np.abs(wave))  # 1.250
+vortex_scalar = 3.69
+krystic_roi = modulation * vortex_scalar  # 4.61
+regolith_baseline = m_prop / 1.0
+regolith_krystic = regolith_baseline / krystic_roi
+
+# === VOL_CAP: Risk Hedging (Volatility × Scalar × Damping) ===
+volatility = np.std(wave)  # ≈0.707
+vol_cap = vortex_scalar * volatility * 0.06  # 3.69 × 0.707 × 0.06 ≈ 0.157
+# → Max allowable drawdown = 15.7% of yield
+
+# === OUTPUT ===
+print(f"Heliocentric Δv (TMI): {dv1.to(u.km/u.s):.2f}")
+print(f"LEO to TMI Δv: {dv_leo_to_tmi.to(u.km/u.s):.2f}")
+print(f"Total Starship Δv: {dv_starship.to(u.km/u.s):.2f}")
+print(f"Propellant: {m_prop.to(u.t):.2f}")
+print(f"Regolith Baseline: {regolith_baseline.to(u.t):.2f}")
+print(f"Regolith Krystic: {regolith_krystic.to(u.t):.2f} (+{((1 - regolith_krystic/regolith_baseline)*100):.1f}% Eff)")
+print(f"Vol_Cap (Risk Limit): {vol_cap:.3f} (±{vol_cap*100:.1f}%)")
