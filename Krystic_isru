@@ -1,0 +1,16 @@
+import numpy as np
+import astropy.units as u
+
+# ISRU Setup
+regolith = 100 * u.t
+baseline = 1.0 * u.t
+roi_baseline = 1.0
+
+# Krystic Pulse
+t = np.linspace(0, 0.5, 1000)
+wave = np.sin(2 * np.pi * 432 * t)
+energy = np.trapz(wave**2, t)
+mod = 1 + energy / np.max(np.abs(wave))
+roi = mod * 3.69
+
+print(f"ROI: {roi:.2f} (+{((roi-1)*100):.0f}%) | Energy: {energy:.3f}")
