@@ -1,0 +1,110 @@
+import qutip as qt
+import numpy as np
+# Optional: import matplotlib.pyplot as plt for viz (plot fids/entropies vs t)
+
+# Parameters: Tune g (MHz->rad/µs), γ dephasing, κ phonon damp, t-span (lighter for N=8)
+N = 8  # NV spins
+g = 0.5 * 2 * np.pi  # Coupling per NV-phonon
+gamma = 0.001 * 2 * np.pi  # Dephasing (µs^-1)
+kappa = 0.1 * 2 * np.pi  # Phonon damp
+total_time = 5.0  # µs (shorter for speed)
+dim_ph = 5  # Truncated phonon (balance compute)
+
+# Spin ops
+Id = qt.qeye(2)
+sz_list = [qt.tensor([Id]*i + [qt.sigmaz()] + [Id]*(N-i-1)) for i in range(N)]
+sx_list = [qt.tensor([Id]*i + [qt.sigmax()] + [Id]*(N-i-1)) for i in range(N)]
+sy_list = [qt.tensor([Id]*i + [qt.sigmay()] + [Id]*(N-i-1)) for i in range(N)]
+
+# Phonon
+a = qt.destroy(dim_ph)
+I_ph = qt.qeye(dim_ph)
+I_spins = qt.tensor([Id for _ in range(N)])
+
+# H_int: collective σ_z-phonon
+H_int = g * sum(qt.tensor(sz_list[i], a + a.dag()) for i in range(N))
+
+# Initial equatorial |+>^N ⊗ |0>_ph
+plus = (qt.basis(2, 0) + qt.basis(2, 1)).unit()
+psi_spins = qt.tensor([plus] * N)
+psi_ph = qt.fock(dim_ph, 0)
+rho0 = qt.tensor(psi_spins, psi_ph) * qt.tensor(psi_spins, psi_ph).dag()
+
+# Seed RX(π/2) collective
+theta = np.pi / 2
+U_rx = (-1j * (theta / 2) * sum(sx_list)).expm()
+rho0 = qt.tensor(U_rx, I_ph) * rho0 * qt.tensor(U_rx, I_ph).dag()
+
+# Dissipators
+c_ops = [np.sqrt(gamma) * qt.tensor(sz_list[i], I_ph) for i in range(N)] + \
+        [np.sqrt(kappa) * qt.tensor(I_spins, a)]
+
+# No DD baseline
+tlist_no_dd = np.linspace(0, total_time, 100)
+result_no_dd = qt.mesolve(H_int, rho0, tlist_no_dd, c_ops=c_ops)
+
+# Optimized DD: UDD times + XY pulses (n_pulses=15 for balance)
+n_pulses = 15
+# UDD times: t_j / T = sin^2( j π / (n_pulses + 1) ), j=1 to n
+udd_times = total_time * np.sin(np.pi * np.arange(1, n_pulses + 1) / (n_pulses + 1))**2
+pulse_times = np.concatenate(([0], udd_times, [total_time]))  # Full intervals
+segments = np.diff(pulse_times)  # Free evo lengths
+
+sequence = ['X', 'Y'] * (n_pulses // 2 + 1)[:n_pulses]  # XY cycle
+
+# Evolve with UDD DD
+current_rho = rho0
+dd_times = [0.0]
+dd_states = [rho0]
+for i, tau_seg in enumerate(segments[:-1]):  # Up to last pulse
+    if tau_seg > 0:
+        t_seg = np.linspace(0, tau_seg, max(5, int(tau_seg * 20)))  # Adaptive points
+        result_seg = qt.mesolve(H_int, current_rho, t_seg, c_ops=c_ops)
+        current_rho = result_seg.states[-1]
+    dd_times.append(pulse_times[i+1])
+    dd_states.append(current_rho)
+    # Pulse at udd_time
+    pulse = sequence[i]
+    if pulse == 'X':
+        U_pulse = (-1j * (np.pi / 2) * sum(sx_list)).expm()
+    else:
+        U_pulse = (-1j * (np.pi / 2) * sum(sy_list)).expm()
+    current_rho = qt.tensor(U_pulse, I_ph) * current_rho * qt.tensor(U_pulse, I_ph).dag()
+
+# Final segment
+t_seg_last = np.linspace(0, segments[-1], max(5, int(segments[-1] * 20)))
+result_last = qt.mesolve(H_int, current_rho, t_seg_last, c_ops=c_ops)
+dd_times.append(total_time)
+dd_states.append(result_last.states[-1])
+t_dd = np.array(dd_times)
+
+# GHZ target
+basis0 = qt.tensor([qt.basis(2, 0)] * N)
+basis1 = qt.tensor([qt.basis(2, 1)] * N)
+ghz = (basis0 + basis1).unit()
+rho_ghz = ghz * ghz.dag()
+
+keep_spins = list(range(N))
+
+# Metrics No DD
+rho_spins_no = [rho.ptrace(keep_spins) for rho in result_no_dd.states]
+fids_no = [qt.fidelity(r, rho_ghz)**2 for r in rho_spins_no]
+ents_no = [qt.entropy_vn(r) for r in rho_spins_no]
+print(f"No DD - Max GHZ fid: {max(fids_no):.5f} at t={tlist_no_dd[np.argmax(fids_no)]:.3f} µs")
+print(f"No DD - Max S_vN: {max(ents_no):.5f} nats (~{max(ents_no)/np.log(2):.2f} bits)")
+print(f"No DD - ΔS: {max(ents_no) - ents_no[0]:.3f} nats ({(max(ents_no)/np.log(2**N))*100:.1f}% max)")
+
+# Metrics UDD DD
+rho_spins_dd = [rho.ptrace(keep_spins) for rho in dd_states]
+fids_dd = [qt.fidelity(r, rho_ghz)**2 for r in rho_spins_dd]
+ents_dd = [qt.entropy_vn(r) for r in rho_spins_dd]
+print(f"UDD DD - Max GHZ fid: {max(fids_dd):.5f} at t={t_dd[np.argmax(fids_dd)]:.3f} µs")
+print(f"UDD DD - Max S_vN: {max(ents_dd):.5f} nats (~{max(ents_dd)/np.log(2):.2f} bits)")
+print(f"UDD DD - ΔS: {max(ents_dd) - ents_dd[0]:.3f} nats ({(max(ents_dd)/np.log(2**N))*100:.1f}% max)")
+
+# Viz (uncomment)
+# plt.plot(tlist_no_dd, fids_no, 'b-', label='No DD Fid'); plt.plot(t_dd, fids_dd, 'r--', label='UDD Fid')
+# plt.xlabel('Time (µs)'); plt.ylabel('Fid'); plt.legend(); plt.show()
+# Similar for ents
+
+# Scale note: For 10^12, cluster N=8; UDD Γ ~ √N γ, entropy ~ log N + const
