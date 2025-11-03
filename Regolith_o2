@@ -1,0 +1,29 @@
+import numpy as np
+import astropy.units as u
+
+# === ISRU: Regolith → Oxygen (NASA Baseline) ===
+regolith_mass = 100 * u.t
+o2_yield_per_100t = 1.0 * u.t  # 1% mass recovery
+baseline_roi = o2_yield_per_100t / regolith_mass  # 0.01
+
+# === KRYSTIC RESONANCE (432 Hz Partial Phase) ===
+t = np.linspace(0, 0.5, 1000)
+freq = 432.0
+wave = np.sin(2 * np.pi * freq * t)
+energy = np.trapz(wave**2, t)  # 0.250
+modulation = 1 + energy / np.max(np.abs(wave))  # 1.250
+
+# === VORTEX SCALAR (369 Hz / 100) ===
+vortex_scalar = 3.69  # 369 / 100
+
+# === ENHANCED OXYGEN YIELD ===
+krystic_roi = modulation * vortex_scalar  # 4.61
+o2_enhanced = o2_yield_per_100t * krystic_roi
+regolith_needed = regolith_mass / krystic_roi
+
+print(f"Energy: {energy:.3f}")
+print(f"Modulation: {modulation:.3f}")
+print(f"Vortex Scalar: {vortex_scalar:.2f}")
+print(f"Krystic ROI: {krystic_roi:.2f} (+{((krystic_roi-1)*100):.0f}%)")
+print(f"O₂ Yield: {o2_enhanced:.2f} (from 100 t regolith)")
+print(f"Regolith Needed: {regolith_needed.to(u.t):.1f} (+{((1 - regolith_needed/regolith_mass)*100):.1f}% Eff)")
