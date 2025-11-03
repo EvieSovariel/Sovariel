@@ -1,0 +1,93 @@
+import numpy as np
+import astropy.units as u
+from astropy.time import Time
+from astropy.coordinates import get_body_barycentric_posvel
+from astropy.constants import G, M_sun
+
+# Mission: 2026 Crewed Mars (Lunar Refuel)
+launch = Time('2026-01-01')
+transit_days = 180
+earth_pv = get_body_barycentric_posvel('earth', launch)
+mars_pv = get_body_barycentric_posvel('mars', launch + transit_days * u.day)
+r_earth = np.linalg.norm(earth_pv[0].xyz)  # ~1 AU
+r_mars = np.linalg.norm(mars_pv[0].xyz)    # ~1.52 AU
+mu_sun = G * M_sun
+
+# Hohmann Δv
+a = (r_earth + r_mars) / 2
+v_peri = np.sqrt(mu_sun * (2/r_earth - 1/a))
+v_apo = np.sqrt(mu_sun * (2/r_mars - 1/a))
+v_earth = np.sqrt(mu_sun / r_earth)
+v_mars = np.sqrt(mu_sun / r_mars)
+dv_tmi = v_peri - v_earth
+dv_mars = v_mars - v_apo
+dv_total_heliocentric = dv_tmi + dv_mars
+
+# LEO to TMI (μ_earth)
+r_leo = 6571e3 * u.m
+mu_earth = 3.986e14 * u.m**3 / u.s**2  # G*M_earth
+v_circ_leo = np.sqrt(mu_earth / r_leo)
+v_tmi_leo = v_peri  # Heliocentric approx
+dv_leo_tmi = v_tmi_leo - v_circ_leo
+
+# Lunar Roundtrip Δv
+r_moon = 1737e3 * u.m
+mu_moon = 4.904e12 * u.m**3 / u.s**2
+dv_lunar = 2 * np.sqrt(mu_moon / r_moon)  # Capture + ascent ~3.36 km/s
+
+# Total Δv
+dv_total = dv_leo_tmi + dv_lunar + dv_tmi + dv_mars
+
+# Krystic ISRU (Lunar)
+t = np.linspace(0, 0.5, 1000)
+wave = np.sin(2 * np.pi * 432 * t)
+energy = np.trapz(wave**2, t)
+modulation = 1 + energy / np.max(np.abs(wave))
+vortex_scalar = 3.69
+krystic_roi = modulation * vortex_scalar
+
+# Sensitivity: o2_yield 1-5%, isp 330-380s
+o2_yields = np.linspace(1.0, 5.0, 5)
+isps = np.linspace(330, 380, 3)
+g0 = 9.80665 * u.m / u.s**2
+
+results = []
+for o2_pct in o2_yields:
+    for isp in isps:
+        m_dry = 100 * u.t
+        m_prop = m_dry * (np.exp(dv_total / (isp * g0)) - 1)
+        o2_baseline = (o2_pct / 100) * 100 * u.t
+        o2_krystic = o2_baseline * krystic_roi
+        regolith_needed = 100 * u.t / krystic_roi
+        payload_baseline = m_dry + m_prop + 100 * u.t
+        payload_krystic = m_dry + (m_prop - o2_krystic) + regolith_needed
+        margin = (payload_baseline - payload_krystic) / payload_baseline * 100
+        vol_cap = 0.156
+        margin_range = [margin * (1 - vol_cap), margin * (1 + vol_cap)]
+        results.append({
+            'o2_yield_pct': o2_pct,
+            'isp_s': isp,
+            'm_prop_t': m_prop.value,
+            'o2_krystic_t': o2_krystic.value,
+            'regolith_t': regolith_needed.value,
+            'payload_margin_pct': margin,
+            'vol_cap_range_pct': margin_range
+        })
+
+# Monte Carlo: 10k runs on vol_cap
+np.random.seed(42)
+mc_runs = 10000
+vol_samples = np.random.normal(0, 0.156, mc_runs)
+mc_margins = [r['payload_margin_pct'] * (1 + v) for r in results for v in vol_samples[:len(results)]]
+mc_mean = np.mean(mc_margins)
+mc_std = np.std(mc_margins)
+
+# Print Summary
+print(f"Target Mission: Crewed Mars 2026 (Lunar ISRU Refuel)")
+print(f"Total Δv Budget: {dv_total.to(u.km/u.s):.2f}")
+print("Sensitivity Table:")
+for r in results:
+    print(f"O₂ {r['o2_yield_pct']}% | Isp {r['isp_s']:.0f}s | Prop {r['m_prop_t']:.1f}t | O₂ {r['o2_krystic_t']:.1f}t | Reg {r['regolith_t']:.1f}t | Margin {r['payload_margin_pct']:.1f}% | Vol Range [{r['vol_cap_range_pct'][0]:.1f}, {r['vol_cap_range_pct'][1]:.1f}]%")
+print(f"Monte Carlo (10k runs): Mean Margin {mc_mean:.1f}%, Std {mc_std:.1f}%")
+</parameter
+</xai:function_call​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​
