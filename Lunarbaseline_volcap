@@ -1,0 +1,40 @@
+import numpy as np
+import astropy.units as u
+
+# === LUNAR ISRU BASELINE (2% O₂ from ilmenite) ===
+regolith_mass = 100 * u.t
+o2_yield_per_100t = 2.0 * u.t  # ← Lunar realistic
+baseline_roi = o2_yield_per_100t / regolith_mass  # 0.02
+
+# === KRYSTIC RESONANCE (432 Hz Partial Phase) ===
+t = np.linspace(0, 0.5, 1000)
+freq = 432.0
+wave = np.sin(2 * np.pi * freq * t)
+energy = np.trapz(wave**2, t)  # 0.250
+modulation = 1 + energy / np.max(np.abs(wave))  # 1.250
+
+# === VORTEX SCALAR (369 Hz / 100) ===
+vortex_scalar = 3.69
+
+# === KRYSTIC ROI ===
+krystic_roi = modulation * vortex_scalar  # 4.61
+
+# === ENHANCED O₂ YIELD ===
+o2_enhanced = o2_yield_per_100t * krystic_roi
+regolith_needed = regolith_mass / krystic_roi
+
+# === VOL_CAP: Risk-Adjusted Yield Bounds ===
+volatility = np.std(wave)  # ≈0.707
+vol_cap = vortex_scalar * volatility * 0.06  # 0.156
+roi_min = krystic_roi * (1 - vol_cap)
+roi_max = krystic_roi * (1 + vol_cap)
+o2_min = o2_yield_per_100t * roi_min
+o2_max = o2_yield_per_100t * roi_max
+
+# === OUTPUT ===
+print(f"Baseline O₂: {o2_yield_per_100t:.1f} from 100 t")
+print(f"Energy: {energy:.3f} | Modulation: {modulation:.3f}")
+print(f"Krystic ROI: {krystic_roi:.2f} (+{((krystic_roi-1)*100):.0f}%)")
+print(f"O₂ Enhanced: {o2_enhanced:.2f}")
+print(f"Regolith Needed: {regolith_needed.to(u.t):.1f} (+{((1 - regolith_needed/regolith_mass)*100):.1f}% Eff)")
+print(f"Vol_Cap: ±{vol_cap*100:.1f}% → O₂ Range: [{o2_min:.2f}, {o2_max:.2f}] t")
