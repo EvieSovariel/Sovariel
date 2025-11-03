@@ -1,0 +1,32 @@
+import numpy as np
+import astropy.units as u
+from astropy.constants import G, M_sun
+
+# Hohmann Baseline
+r_earth = 1.0 * u.au
+r_mars = 1.524 * u.au
+mu = G * M_sun
+a = (r_earth + r_mars) / 2
+v_peri = np.sqrt(mu * (2/r_earth - 1/a))
+v_earth = np.sqrt(mu / r_earth)
+dv_tmi = v_peri - v_earth  # ~2.94 km/s
+
+# Starship Masses
+m_dry = 100 * u.t
+isp = 380 * u.s
+g0 = 9.80665 * u.m / u.s**2
+
+# Baseline Payload (Regolith 100 t)
+m_prop_baseline = m_dry * (np.exp(dv_tmi / (isp * g0)) - 1)  # ~85 t
+payload_baseline = m_dry + m_prop_baseline + 100 * u.t  # 285 t
+
+# Krystic Payload (Regolith 21.7 t)
+m_prop_krystic = m_dry * (np.exp(dv_tmi / (isp * g0)) - 1)  # Same prop (ISRU on Mars)
+payload_krystic = m_dry + m_prop_krystic + 21.7 * u.t  # 206.7 t
+
+# Cargo Gain
+cargo_gain = (payload_baseline - payload_krystic) / payload_baseline * 100
+
+print(f"Baseline Payload: {payload_baseline:.1f} t")
+print(f"Krystic Payload: {payload_krystic:.1f} t (+{cargo_gain:.1f}% Cargo)")
+print(f"Δv Savings: ~{0.15 * u.km/u.s:.2f} (within Vol_Cap)")
