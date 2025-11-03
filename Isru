@@ -1,0 +1,29 @@
+import numpy as np
+import astropy.units as u
+from astropy.constants import G, M_earth
+
+# === PARAMS: Mars Regolith ISRU (Baseline NASA) ===
+regolith_mass = 100 * u.ton
+lox_ch4_yield = 0.01  # 1% mass → propellant (baseline)
+baseline_roi = regolith_mass.value * lox_ch4_yield  # 1.0
+
+# === KRYSTIC-VORTEX PULSE (64-Tetra Grid + 432 Hz) ===
+grid_points = 64
+time_steps = 1000
+freq = 432.0  # Hz
+t = np.linspace(0, 1, time_steps)
+wave = np.sin(2 * np.pi * freq * t)  # Pure harmonic
+krystic_grid = np.linspace(0, 2*np.pi, grid_points)
+modulation = np.sum(np.sin(krystic_grid)) / grid_points  # Geometric coherence
+
+# === VOL_CAP DERIVATION (0.15) ===
+# From 3.69 vortex scalar: std(wave) ≈ 0.707 → cap = 3.69 * 0.707 * 0.06 ≈ 0.15
+volatility = np.std(wave)
+vol_cap = 3.69 * volatility * 0.06  # 6% damping → 0.15 cap
+print(f"Vol_Cap: {vol_cap:.3f}")
+
+# === YIELD CALCULATION ===
+vortex_scalar = 3.69
+krystic_roi = np.sum(wave) * vortex_scalar * modulation  # Raw pulse
+final_roi = krystic_roi / 1000  # Normalize to baseline scale
+print(f"Krystic ROI: {final_roi:.2f} (+{((final_roi-1)*100):.1f}%)")
