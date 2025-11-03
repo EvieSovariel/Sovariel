@@ -1,0 +1,73 @@
+import numpy as np
+import astropy.units as u
+from astropy.coordinates import SkyCoord, EarthLocation, AltAz, get_sun
+from astropy.time import Time
+from astropy.constants import G, M_earth
+from scipy.integrate import solve_ivp
+
+# === STARSHIP ORBITAL MECHANICS (Hohmann Transfer) ===
+r_earth = (6371 + 200) * u.km  # LEO
+r_mars = 1.524 * u.au
+mu = G * M_earth
+
+# Delta-V (simplified)
+v1 = np.sqrt(mu / r_earth) * (np.sqrt(2 * r_mars / (r_earth + r_mars)) - 1)
+v2 = np.sqrt(mu / r_mars) * (1 - np.sqrt(2 * r_earth / (r_earth + r_mars)))
+dv_total = v1 + v2
+
+# Propellant (Rocket Equation)
+m_dry = 100 * u.t
+isp = 380 * u.s
+g0 = 9.80665 * u.m / u.s**2
+m_prop = m_dry * (np.exp(dv_total / (isp * g0)) - 1)
+
+# === KRYSTIC ISRU MODULATION ===
+regolith_baseline = m_prop / 1.0  # 1 t prop / 100 t regolith
+t = np.linspace(0, 0.5, 1000)
+wave = np.sin(2 * np.pi * 432 * t)
+energy = np.trapz(wave**2, t)
+modulation = 1 + energy / np.max(np.abs(wave))
+krystic_roi = modulation * 3.69  # 6.30
+regolith_krystic = regolith_baseline / krystic_roi
+
+# === ASTROPY SKYCOORD TRAJECTORY (Hohmann Elliptic Orbit) ===
+def hohmann_orbit(t, y, a, e):
+    r = y[0]
+    theta = y[1]
+    mu_val = mu.to(u.m**3 / u.s**2).value
+    drdt = y[2]
+    dthetadt = y[3]
+    d2rdt2 = (mu_val / r**2) * (1 - e * np.cos(theta)) - (mu_val / r**3) * (1 + e * np.cos(theta))**2
+    d2thetadt2 = -2 * drdt * dthetadt / r
+    return [drdt, dthetadt, d2rdt2, d2thetadt2]
+
+# Semi-major axis and eccentricity
+a = ((r_earth + r_mars) / 2).to(u.m).value
+e = ((r_mars - r_earth) / (r_mars + r_earth)).value
+
+# Initial conditions: [r, theta, dr/dt, dtheta/dt]
+r0 = r_earth.to(u.m).value
+theta0 = 0
+v_peri = np.sqrt(mu / r_earth * (1 + e) / (1 - e))
+drdt0 = 0
+dthetadt0 = v_peri.to(u.m/u.s).value / r0
+
+# Integrate trajectory
+t_span = (0, 180*86400)  # 180 days
+sol = solve_ivp(hohmann_orbit, t_span, [r0, theta0, drdt0, dthetadt0], args=(a, e), t_eval=np.linspace(0, t_span[1], 1000), rtol=1e-8)
+
+# Convert to SkyCoord (ICRS)
+times = Time('2025-01-01') + sol.t * u.s
+ra = np.arctan2(np.sin(sol.y[1]), np.cos(sol.y[1])) * u.rad
+dec = np.zeros_like(ra)  # Ecliptic plane approx
+coords = SkyCoord(ra=ra, dec=dec, frame='icrs', obstime=times)
+
+# === OUTPUT ===
+print(f"Total Δv: {dv_total.to(u.km/u.s):.2f}")
+print(f"Propellant Needed: {m_prop.to(u.t):.2f}")
+print(f"Regolith Baseline: {regolith_baseline.to(u.t):.2f}")
+print(f"Regolith Krystic: {regolith_krystic.to(u.t):.2f} (+{((1 - regolith_krystic / regolith_baseline) * 100):.1f}% Eff)")
+print(f"Trajectory Sample (SkyCoord):")
+print(f"  Start: RA={coords[0].ra:.2f}, Dec={coords[0].dec:.2f}")
+print(f"  Mid:   RA={coords[500].ra:.2f}, Dec={coords[500].dec:.2f}")
+print(f"  End:   RA={coords[-1].ra:.2f}, Dec={coords[-1].dec:.2f}")
