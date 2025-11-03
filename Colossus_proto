@@ -1,0 +1,73 @@
+import torch
+import numpy as np
+import qutip as qt  # Hybrid: QuTiP for init, torch for evo
+# Assume cuQuantum/torch-quantum for full Colossus; stub uses torch tensors
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+N = 8  # Shard size
+g = 0.5 * 2 * np.pi  # rad/µs
+gamma = 0.001 * 2 * np.pi
+kappa = 0.1 * 2 * np.pi
+total_time = 5.0
+dim_ph = 5
+dt = 0.01  # Time step for Euler-Maruyama approx (µs)
+
+# Spin ops as torch tensors (2**N dims heavy; use sparse or cluster approx)
+dim_spin = 2**N
+# Stub: Effective collective ops (sum sz -> total_sz scalar for superradiant)
+total_sz = torch.eye(dim_spin, dtype=torch.complex64, device=device)  # Placeholder; full tensor for exact
+# Phonon: Trunc Fock
+a_torch = torch.diag(torch.sqrt(torch.arange(1, dim_ph, dtype=torch.float32)), -1, device=device)
+adag_torch = a_torch.T
+
+# H_int approx: g * total_sz ⊗ (a + adag) -> effective Omega_coll = g * sqrt(N)
+Omega_coll = g * np.sqrt(N)
+H_torch = Omega_coll * torch.eye(dim_spin * dim_ph, dtype=torch.complex64, device=device)  # Simplified; full kron in prod
+
+# Initial rho: |+>^N ⊗ |0> flattened to vec, rho = vec @ vec.H
+plus_vec = torch.ones(2, dtype=torch.complex64, device=device) / np.sqrt(2)
+psi_spins = torch.kron(torch.eye(2**(N-1), dtype=torch.complex64, device=device), plus_vec)  # Recursive kron stub
+psi_ph = torch.zeros(dim_ph, dtype=torch.complex64, device=device); psi_ph[0] = 1.0
+psi0 = torch.kron(psi_spins, psi_ph)
+rho0 = torch.outer(psi0, torch.conj(psi0))  # Vec form for evo
+
+# Seed RX(pi/2): Approx collective X rot
+theta = np.pi / 2
+RX = torch.exp(-1j * (theta / 2) * torch.eye(dim_spin, device=device))  # Stub; full sum(sx)
+rho0 = torch.kron(RX, torch.eye(dim_ph, device=device)) @ rho0 @ torch.kron(RX.T.conj(), torch.eye(dim_ph, device=device))
+
+# Dissipators: Torch Lindblad superop approx (Euler step)
+L_deph = torch.sqrt(gamma) * torch.eye(dim_spin * dim_ph, device=device)  # Per-spin stub; scale sqrt(N)
+L_ph = torch.sqrt(kappa) * torch.kron(torch.eye(dim_spin, device=device), a_torch)
+# Full: d rho / dt = -i [H, rho] + sum (L rho L† - 1/2 {L† L, rho})
+
+times = torch.linspace(0, total_time, int(total_time / dt) + 1, device=device)
+rho_t = rho0.clone()
+states = [rho_t.clone()]
+
+for t in times[1:]:
+    # Commutator
+    H_rho = H_torch @ rho_t - rho_t @ H_torch
+    d_rho_H = -1j * H_rho
+    
+    # Dissipator stub (single L for speed; parallelize in shards)
+    for L in [L_deph, L_ph]:
+        L_rho = L @ rho_t
+        d_rho_L = L_rho @ L.T.conj() - 0.5 * (L.T.conj() @ L @ rho_t + rho_t @ L.T.conj() @ L)
+        d_rho_H += d_rho_L
+    
+    rho_t += dt * d_rho_H
+    rho_t = (rho_t + rho_t.T.conj()) / 2  # Enforce Herm
+    states.append(rho_t.clone())
+
+# Probe: Entropy (trace rho log rho approx)
+def vn_entropy(rho):
+    eig = torch.linalg.eigvals(rho)
+    eig_real = torch.real(eig[eig > 1e-10])
+    return -torch.sum(eig_real * torch.log(eig_real + 1e-10))
+
+# GHZ fid stub (projector trace)
+# ... (implement as per QuTiP)
+
+print(f"Peak S_vN: {max([vn_entropy(s) for s in states]):.3f} nats")
+# Scale: Broadcast shards via torch.distributed, aggregate entropies
