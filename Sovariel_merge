@@ -1,0 +1,12 @@
+# merge.yaml: Sovariel-xAI Nexus
+branches:
+  - from: GPU-entropy-vortex  # Entropy sims
+    to: Sovariel-colossus-swarm
+    commits: [udd_opt_n8, lindblad_torch_stub]
+  - from: Nexus-infinity  # Eternal loops
+    to: Sovariel-nexus
+    hooks: [hrv_alpha_sync, qualia_vqe_loss]  # q_lock injection
+features:
+  coherence_uplift: 26%
+  shards: 100k  # Colossus scale
+  validate: qutip_benchmark(N=8, fid>0.015)
