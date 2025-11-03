@@ -1,0 +1,26 @@
+import numpy as np
+import astropy.units as u
+
+# === BASELINE (NASA ISRU) ===
+regolith_mass = 100 * u.ton
+baseline_yield = 1.0  # 1 ton propellant / 100 tons regolith
+baseline_roi = baseline_yield  # = 1.0
+
+# === KRYSTIC ENERGY (Partial Phase + Scaling) ===
+t = np.linspace(0, 0.5, 1000)  # ← Partial phase (0→0.5) = Gain
+freq = 432.0
+wave = np.sin(2 * np.pi * freq * t)  # Full cycle over t
+energy = np.trapz(wave**2, t)  # Physical energy (∫sin²)
+
+# Scale to baseline energy (1.0)
+baseline_energy = np.trapz(np.ones_like(wave)**2, t)
+scale_factor = 1.0 / baseline_energy  # Normalize
+
+# === ROI CALCULATION ===
+vortex_scalar = 3.69
+krystic_roi = (energy * scale_factor) * vortex_scalar
+vol_cap = vortex_scalar * np.std(wave) * 0.06  # 0.157
+
+print(f"Energy: {energy:.3f} → Scaled: {energy*scale_factor:.3f}")
+print(f"Krystic ROI: {krystic_roi:.2f} (+{((krystic_roi-1)*100):.0f}%)")
+print(f"Vol_Cap: {vol_cap:.3f}")
