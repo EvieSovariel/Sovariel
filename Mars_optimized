@@ -4,6 +4,7 @@ from astropy.time import Time
 from astropy.coordinates import get_body_barycentric_posvel
 from astropy.constants import G, M_sun, M_earth
 from scipy.optimize import minimize
+from pulp import LpMinimize, LpProblem, LpVariable, lpSum, value
 
 # Mission: 2026 Crewed Mars Precursor (Lunar ISRU)
 launch = Time('2026-01-01')
@@ -35,6 +36,15 @@ dv_leo_tmi = v_escape - v_circ_leo
 # Total Δv (nominal)
 dv_total = dv_leo_tmi + dv_lunar + dv_tmi + dv_mars_nominal
 
+# Planetary Gravity Perturbs (J2 + n-body approx)
+j2_accel = 7.29e-5 * u.m / u.s**2
+n_body_accel = 1e-6 * u.m / u.s**2  # Approx from Mars/Earth
+dv_pert_grav = (j2_accel + n_body_accel) * transit_days * u.day
+
+# Aero Var on Mars (density ±10%)
+atm_var = 0.10
+dv_mars_var = dv_mars_nominal * (1 + np.random.normal(0, atm_var))  # Sample
+
 # Krystic ROI
 t = np.linspace(0, 0.5, 1000)
 wave = np.sin(2 * np.pi * 432 * t)
@@ -43,39 +53,35 @@ modulation = 1 + energy / np.max(np.abs(wave))
 vortex_scalar = 3.69
 krystic_roi = modulation * vortex_scalar
 
-# Objective: Minimize total mass = f(isp, o2_yield)
-def objective(params):
-    isp, o2_yield = params
-    m_prop = m_dry * (np.exp(dv_total / (isp * g0)) - 1)
-    o2_baseline = (o2_yield / 100) * 100 * u.t
-    o2_krystic = o2_baseline * krystic_roi
-    regolith_needed = 100 * u.t / krystic_roi
-    total_mass = m_dry + m_prop - o2_krystic + regolith_needed
-    return total_mass.value
+# PuLP Resource Optimization (Min Mass for Fixed Payload)
+prob = LpProblem("ISRU_Opt", LpMinimize)
+o2_yield = LpVariable("o2_yield", 1, 5)
+isp = LpVariable("isp", 330, 380)
+m_prop = m_dry * (np.exp(dv_total / (isp * g0)) - 1)
+o2_baseline = (o2_yield / 100) * 100 * u.t
+o2_krystic = o2_baseline * krystic_roi
+regolith_needed = 100 * u.t / krystic_roi
+total_mass = m_dry + m_prop - o2_krystic + regolith_needed
+prob += total_mass  # Minimize
+prob.solve()
 
-# Bounds & Optimize
-bounds = [(330, 380), (1, 5)]
-initial_guess = [355, 2.5]
-result = minimize(objective, initial_guess, bounds=bounds, method='L-BFGS-B')
-opt_isp, opt_o2 = result.x
-opt_mass = result.fun
+opt_o2 = value(o2_yield)
+opt_isp = value(isp)
+opt_mass = value(total_mass)
 
-# Perturbations: J2 (oblateness) + SRP (radiation pressure)
-j2_accel = 7.29e-5 * u.m / u.s**2  # LEO J2
-srp_accel = 4.56e-6 * u.m / u.s**2  # 1 AU SRP
-dv_pert = (j2_accel + srp_accel) * transit_days * u.day  # ~0.04 km/s
-
-# Monte Carlo: 10k runs on vol_cap + pert noise
+# Monte Carlo: 10k runs on vol_cap + pert + atm var
 np.random.seed(42)
 mc_runs = 10000
 vol_cap = 0.156
-pert_noise = np.random.normal(0, 0.01, mc_runs)  # ±1% pert var
-mc_margins = 27.5 * (1 + np.random.normal(0, vol_cap, mc_runs) + pert_noise)
+pert_noise = np.random.normal(0, 0.01, mc_runs)
+atm_noise = np.random.normal(0, 0.10, mc_runs)
+mc_margins = 27.5 * (1 + np.random.normal(0, vol_cap, mc_runs) + pert_noise + atm_noise)
 mc_mean = np.mean(mc_margins)
 mc_std = np.std(mc_margins)
 
 # Output
-print(f"Optimized isp: {opt_isp:.1f}s, o2_yield: {opt_o2:.1f}% | Opt Mass: {opt_mass:.1f}t")
-print(f"Δv Pert (J2 + SRP): {dv_pert.to(u.km/u.s):.3f}")
+print(f"Optimized o2_yield: {opt_o2:.1f}%, isp: {opt_isp:.1f}s | Opt Mass: {opt_mass:.1f}t")
+print(f"Δv Pert (Grav): {dv_pert_grav.to(u.km/u.s):.3f}")
+print(f"dv_mars Var Sample: {dv_mars_var.to(u.km/u.s):.2f}")
 print(f"MC Mean Margin: {mc_mean:.1f}%, Std: {mc_std:.1f}%")
-print(f"Total Δv (w/ Pert): {dv_total + dv_pert:.2f}")
+print(f"Total Δv (w/ Pert): {dv_total + dv_pert_grav:.2f}")
