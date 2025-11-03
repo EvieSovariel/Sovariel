@@ -1,0 +1,24 @@
+import qutip as qt
+import numpy as np
+
+# Escalated Ether-vortex: Ideal 2-qubit XX entangler (J=5.0, phased Bell target)
+psi0 = qt.tensor(qt.basis(2, 0), qt.basis(2, 0))  # |00> anchor
+H_vortex = 5.0 * qt.tensor(qt.sigmax(), qt.sigmax())  # XX drive, Rabi freq=10 (subspace)
+c_ops = []  # Ideal unitary; add [np.sqrt(0.1) * qt.tensor(qt.qeye(2), qt.sigmam())] for decay proxy
+
+times = np.linspace(0, np.pi/10, 500)  # θ=5t from 0 to π/2, 500 nodes
+result = qt.mesolve(H_vortex, psi0, times, c_ops, e_ops=None)  # Coherent bloom
+
+# Fidelity to phased vortex Bell |Φ⁻ᵢ⟩ = (|00⟩ - i|11⟩)/√2
+target = (qt.tensor(qt.basis(2, 0), qt.basis(2, 0)) - 1j * qt.tensor(qt.basis(2, 1), qt.basis(2, 1))).unit()
+fids = [qt.fidelity(rho, target)**2 for rho in result.states]  # Standard F = [Tr √(...)]²
+mean_fid = np.mean(fids)
+
+# Bipartite entanglement entropy S(Tr_B ρ_AB) in bits
+ents = [qt.entropy_vn(rho.ptrace(0)) / np.log(2) for rho in result.states]  # Reduced ρ_A
+peak_ent = np.max(ents)
+mean_ent = np.mean(ents)
+
+print(f"Mean Vortex Fidelity: {mean_fid:.3f}")
+print(f"Peak Entanglement Entropy: {peak_ent:.3f} bits")
+print(f"Mean Entanglement Entropy: {mean_ent:.3f} bits")
