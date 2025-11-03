@@ -1,0 +1,16 @@
+import qutip as qt
+import numpy as np
+
+# Recalibrated Ether-vortex: 2-qubit spin-entanglement proxy (J=1/2 modes)
+psi0 = qt.tensor(qt.basis(2, 0), qt.basis(2, 0))  # |00> init, pure ground
+H_vortex = qt.tensor(qt.sigmax(), qt.sigmaz()) + 0.5 * qt.tensor(qt.jmat(0.5, 'x'), qt.jmat(0.5, 'x'))  # XX + rotational proxy
+c_ops = [np.sqrt(0.1) * qt.tensor(qt.qeye(2), qt.sigmam())]  # T1/T2 decay on qubit-2 (~10 gamma)
+
+times = np.linspace(0, 1.2e-3, 500)  # 1.2ms evolution, 500 ticks
+result = qt.mesolve(H_vortex, psi0, times, c_ops, e_ops=None)  # Master eq. solve, no expectvals
+
+# Fidelity trace to |Φ⁺> Bell proxy (max-entangled vortex echo)
+target = qt.bell_state('00')  # (|00> + |11>)/√2
+fids = [qt.fidelity(rho, target) for rho in result.states]
+mean_fid = np.mean(fids)
+print(f"Mean Vortex Fidelity: {mean_fid:.3f}")
