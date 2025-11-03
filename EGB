@@ -1,0 +1,42 @@
+import qutip as qt
+import numpy as np
+import time
+
+# Full Resonant XX Entangling Gate Benchmark
+start_time = time.time()
+
+# System setup
+psi0 = qt.tensor(qt.basis(2, 0), qt.basis(2, 0))  # Initial state |00>
+g = 5.0  # Coupling strength (units: ħ=1)
+H = g * qt.tensor(qt.sigmax(), qt.sigmax())  # Resonant XX Hamiltonian
+target = qt.tensor(qt.basis(2, 1), qt.basis(2, 1))  # Target state |11>
+
+# Time evolution parameters
+tlist = np.linspace(0, np.pi / (2 * g), 200)  # From 0 to π/(2g) for full transfer
+
+# Solve the master equation (unitary case: no collapse operators for ideal resonance)
+result = qt.mesolve(H, psi0, tlist, c_ops=None)  # Returns states at each t in tlist
+
+# Compute fidelities: F(t) = |⟨ψ(t)|11⟩|² (probability of target state)
+fidelities = [abs(state.overlap(target))**2 for state in result.states]
+peak_fid = np.max(fidelities)
+final_fid = fidelities[-1]
+
+# Bipartite entanglement entropy: S = -Tr(ρ_A log₂ ρ_A) for reduced density matrix of qubit 1
+entropies = [qt.entropy_vn(state.ptrace(0)) / np.log(2) for state in result.states]
+peak_ent = np.max(entropies)
+mean_ent = np.mean(entropies)
+
+# Simulation time (wall-clock)
+sim_time = time.time() - start_time
+
+# Output results
+print(f"Simulation Time: {sim_time:.4f} seconds")
+print(f"Peak Fidelity to |11⟩: {peak_fid:.4f}")
+print(f"Final Fidelity to |11⟩: {final_fid:.4f}")
+print(f"Peak Entanglement Entropy: {peak_ent:.4f} bits")
+print(f"Mean Entanglement Entropy: {mean_ent:.4f} bits")
+
+# Analytical verification for final fidelity: sin²(g * t_final)
+analytical_fid = np.sin(g * tlist[-1])**2
+print(f"Analytical Final Fidelity: {analytical_fid:.4f}")
