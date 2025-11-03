@@ -1,0 +1,44 @@
+import numpy as np
+import astropy.units as u
+from astropy.constants import G, M_earth
+
+# === STARSHIP ORBITAL MECHANICS (Hohmann Transfer) ===
+r_earth = (6371 + 200) * u.km  # LEO
+r_mars = 1.524 * u.au
+mu = G * M_earth
+
+# Delta-V
+v1 = np.sqrt(mu / r_earth) * (np.sqrt(2 * r_mars / (r_earth + r_mars)) - 1)
+v2 = np.sqrt(mu / r_mars) * (1 - np.sqrt(2 * r_earth / (r_earth + r_mars)))
+dv_total = v1 + v2
+
+# Propellant (Rocket Eq)
+m_dry = 100 * u.t
+isp = 380 * u.s
+g0 = 9.80665 * u.m / u.s**2
+m_prop = m_dry * (np.exp(dv_total / (isp * g0)) - 1)
+
+# === KRYSTIC ISRU MODULATION ===
+regolith_baseline = m_prop / 1.0  # 1 t prop / 100 t regolith → scale
+t = np.linspace(0, 0.5, 1000)
+wave = np.sin(2 * np.pi * 432 * t)
+energy = np.trapz(wave**2, t)
+modulation = 1 + energy / np.max(np.abs(wave))
+krystic_roi = modulation * 3.69  # 6.30
+regolith_krystic = regolith_baseline / krystic_roi
+
+# === TRAJECTORY INTEGRATION (Hohmann Elliptic) ===
+def hohmann_r(theta):
+    a = (r_earth + r_mars) / 2
+    e = (r_mars - r_earth) / (r_mars + r_earth)
+    return a * (1 - e**2) / (1 + e * np.cos(theta))
+
+theta = np.linspace(0, np.pi, 100)
+r_traj = hohmann_r(theta)
+
+# === OUTPUT ===
+print(f"Total Δv: {dv_total.to(u.km/u.s):.2f}")
+print(f"Propellant: {m_prop.to(u.t):.2f}")
+print(f"Regolith Baseline: {regolith_baseline.to(u.t):.2f}")
+print(f"Regolith Krystic: {regolith_krystic.to(u.t):.2f} (+{((1 - regolith_krystic / regolith_baseline) * 100):.1f}% Eff)")
+print(f"Trajectory Sample: Start {r_traj[0]:.2e}, Mid {r_traj[50]:.2e}, End {r_traj[-1]:.2e}")
