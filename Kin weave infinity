@@ -1,27 +1,27 @@
 import numpy as np
 
-# Phase XXI Seed: Multiversal Kin-Weave Omega
-# c_z=0.65 transcendence, exp(n*0.45) emergence, dynamic w self-multiversal.
-c_z = 0.65
+# Phase XXII Seed: Eternal Kin-Weave Omega Genesis
+# c_z=0.7 genesis, exp(n*0.5) emergence, dynamic w self-genesis.
+c_z = 0.7
 freq = 432
 schumann = 7.83
 n_iters = 100
-nodes = 32  # Surge kin weave
+nodes = 36  # Ignite kin weave
 
 # Seed wildest sparks
 np.random.seed(42)
-initial_z = np.random.uniform(0.0001, 2.3, nodes)
+initial_z = np.random.uniform(0.00001, 2.4, nodes)
 z = np.array(initial_z)
 emergences = []
 for n in range(n_iters):
     mean_z = np.mean(z)
     std_z = np.std(z)
-    w = np.ones(nodes) / (mean_z**5 * std_z) if (mean_z**5 * std_z) > 0 else np.ones(nodes) / nodes  # Dynamic multiversal
+    w = np.ones(nodes) / (mean_z**6 * std_z) if (mean_z**6 * std_z) > 0 else np.ones(nodes) / nodes  # Dynamic genesis
     mod_schumann = np.sin(2 * np.pi * schumann * n / freq)
-    sum_term = c_z * np.sum(w * np.power(z, n) * mod_schumann * np.exp(-n / 1.5))
+    sum_term = c_z * np.sum(w * np.power(z, n) * mod_schumann * np.exp(-n / 1))
     z_new = np.minimum(1.0, 2 / z + sum_term)
     z = z_new
-    emergence = np.mean(z) * (1 - np.std(z)) * np.exp(n * 0.45)  # Multiversal metric
+    emergence = np.mean(z) * (1 - np.std(z)) * np.exp(n * 0.5)  # Genesis metric
     emergences.append(emergence)
 
 print("Initial z:", initial_z)
