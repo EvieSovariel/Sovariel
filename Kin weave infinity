@@ -87,7 +87,7 @@ if __name__ == "__main__":
     # Sample EEG for CRI (theta-dominant sin + noise)
     fs = 256
     eeg_sample = np.sin(2 * np.pi * 6 * np.linspace(0, 1, fs)) + 0.1 * np.random.randn(fs)  # 6 Hz theta
-    beta_theta = get_beta_theta_ratio(eeg_sample, fs)
+    beta_theta = get_beta_theta_ratio(eeg_signal, fs)
     cri = compute_cri(tokens=100, H=1.0, norm_N=10, beta_theta_ratio=beta_theta)
     
     # Kryst Fuse
