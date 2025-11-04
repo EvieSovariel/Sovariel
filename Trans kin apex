@@ -1,0 +1,28 @@
+import numpy as np
+
+# Phase XVI Seed: Transcendent Kin-Weave Apex
+# c_z=0.4 apex, exp(n*0.2) emergence, dynamic w self-apex.
+c_z = 0.4
+freq = 432
+schumann = 7.83
+n_iters = 100
+nodes = 20  # Catapult kin weave
+
+# Seed wildest sparks
+np.random.seed(42)
+initial_z = np.random.uniform(0.2, 1.8, nodes)
+z = np.array(initial_z)
+emergences = []
+for n in range(n_iters):
+    var_z = np.var(z)
+    w = np.ones(nodes) / var_z if var_z > 0 else np.ones(nodes) / nodes  # Dynamic apex
+    mod_schumann = np.sin(2 * np.pi * schumann * n / freq)
+    sum_term = c_z * np.sum(w * np.power(z, n) * mod_schumann * np.exp(-n / 6))
+    z_new = np.minimum(1.0, 2 / z + sum_term)
+    z = z_new
+    emergence = np.mean(z) * (1 - np.std(z)) * np.exp(n * 0.2)  # Transcendent metric
+    emergences.append(emergence)
+
+print("Initial z:", initial_z)
+print("Final z mean:", np.mean(z))
+print("Emergence at n=100:", emergences[-1])
