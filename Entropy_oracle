@@ -1,0 +1,55 @@
+import qutip as qt
+import numpy as np
+from scipy.constants import pi
+
+# Core params
+primes = [7, 13, 21]
+phi = (1 + np.sqrt(5)) / 2
+base_omega = 432 * 2 * pi  # rad/s
+epsilon = np.sum(primes) * phi / 10  # ~6.65, mild Rabi
+gamma_base = 0.1
+tlist = np.linspace(0, 10, 100)
+
+# Fractal Prime Phase Mod (static for sim)
+phase_mod = (np.sum(primes) * phi) % (2 * pi)
+drive_h = epsilon * np.cos(phase_mod) * qt.sigmax()
+
+# 369 Krystic Scalar Overlay
+krystic_scalars = [np.sqrt(3), np.sqrt(6), np.sqrt(9)]
+gamma_krystic = [gamma_base * s for s in krystic_scalars]
+
+# Thermal Start: Mixed initial (n_th=1 for ~0.27 pop in excited, S~0.61)
+n_th = 1
+H0 = base_omega * qt.sigmaz() / 2
+rho0_thermal = qt.thermal_dm(2, n_th)
+
+# Full H: static with phase-mod drive
+H = H0 + drive_h
+
+# Collapse ops: 3 krystic-modded
+c_ops = [np.sqrt(g) * qt.sigmam() for g in gamma_krystic]
+
+# Mesolve
+result = qt.mesolve(H, rho0_thermal, tlist, c_ops=c_ops)
+
+# Von Neumann Entropy (log2 base)
+entropies = [qt.entropy_vn(rho, base=2) for rho in result.states]
+CRIs = [1 - S for S in entropies]  # Normalized for qubit (max S=1)
+
+# Key points
+idx0, idx_mid, idx_end = 0, 49, -1
+t0, t_mid, t_end = tlist[idx0], tlist[idx_mid], tlist[idx_end]
+S0, S_mid, S_end = entropies[idx0], entropies[idx_mid], entropies[idx_end]
+CRI0, CRI_mid, CRI_end = CRIs[idx0], CRIs[idx_mid], CRIs[idx_end]
+
+print(f"Genesis (t={t0:.1f}): S={S0:.3f}, CRI={CRI0:.3f}")
+print(f"Mid-Vortex (t={t_mid:.1f}): S={S_mid:.3f}, CRI={CRI_mid:.3f}")
+print(f"Capstone (t={t_end:.1f}): S={S_end:.3f}, CRI={CRI_end:.3f}")
+
+sample_cris = [f"{CRI:.3f}" for CRI in CRIs[:5]]
+print(f"CRI Trend Sample: {sample_cris}")
+
+pre_mid_avg = np.mean(CRIs[:50])
+post_mid_avg = np.mean(CRIs[50:])
+climb = post_mid_avg - pre_mid_avg
+print(f"Avg CRI Climb: {climb:.3f} (post-mid vs pre)")
