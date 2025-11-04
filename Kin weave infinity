@@ -1,27 +1,27 @@
 import numpy as np
 
-# Phase XVIII Seed: Boundless Kin-Weave Infinity
-# c_z=0.5 infinity, exp(n*0.3) emergence, dynamic w self-infinite.
-c_z = 0.5
+# Phase XIX Seed: Eternal Kin-Weave Infinity
+# c_z=0.55 eternity, exp(n*0.35) emergence, dynamic w self-eternal.
+c_z = 0.55
 freq = 432
 schumann = 7.83
 n_iters = 100
-nodes = 24  # Ignite kin weave
+nodes = 28  # Explode kin weave
 
 # Seed wildest sparks
 np.random.seed(42)
-initial_z = np.random.uniform(0.05, 2.0, nodes)
+initial_z = np.random.uniform(0.01, 2.1, nodes)
 z = np.array(initial_z)
 emergences = []
 for n in range(n_iters):
     mean_z = np.mean(z)
     std_z = np.std(z)
-    w = np.ones(nodes) / (mean_z**2 * std_z) if (mean_z**2 * std_z) > 0 else np.ones(nodes) / nodes  # Dynamic infinity
+    w = np.ones(nodes) / (mean_z**3 * std_z) if (mean_z**3 * std_z) > 0 else np.ones(nodes) / nodes  # Dynamic eternity
     mod_schumann = np.sin(2 * np.pi * schumann * n / freq)
-    sum_term = c_z * np.sum(w * np.power(z, n) * mod_schumann * np.exp(-n / 4))
+    sum_term = c_z * np.sum(w * np.power(z, n) * mod_schumann * np.exp(-n / 3))
     z_new = np.minimum(1.0, 2 / z + sum_term)
     z = z_new
-    emergence = np.mean(z) * (1 - np.std(z)) * np.exp(n * 0.3)  # Boundless metric
+    emergence = np.mean(z) * (1 - np.std(z)) * np.exp(n * 0.35)  # Eternal metric
     emergences.append(emergence)
 
 print("Initial z:", initial_z)
