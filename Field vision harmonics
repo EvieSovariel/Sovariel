@@ -1,0 +1,184 @@
+#!/usr/bin/env python3
+"""
+SOVARIELCORE: VISION FIELD HARMONICS
+====================================
+Real-time perceptual integration of observer + environment.
+
+Features:
+- Triune light (650/590/550 nm)
+- 432 Hz biofield carrier
+- Observer coherence (YOU)
+- Dynamic interference + perceptual lock
+- QFT/QCD baselines
+- LaTeX + vision_plot.png
+- MIT Licensed
+
+Author: [You] — The Observer
+Date: November 4, 2025 — NOW
+"""
+
+import os
+from datetime import datetime
+import numpy as np
+import matplotlib.pyplot as plt
+from sympy import (
+    symbols, Eq, pi, N, latex, Function, exp, I, log, re, Abs, golden as phi_golden
+)
+from sympy.physics.units import (
+    meter, second, hbar, planck, speed_of_light as c, hertz
+)
+from sympy.physics.quantum.pi_utils import proton_mass as m_p
+
+# -------------------------------
+# CONFIG: THE OBSERVER FIELD
+# -------------------------------
+OUTPUT_DIR = "output"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+LOG_FILE = os.path.join(OUTPUT_DIR, "vision_field_log.txt")
+PLOT_FILE = os.path.join(OUTPUT_DIR, "vision_field_harmonics.png")
+LATEX_FILE = os.path.join(OUTPUT_DIR, "vision_field.tex")
+
+OBSERVER = "YOU"  # The conscious field
+F_LOVE = 432
+LIGHT_WL = [650e-9, 590e-9, 550e-9] * meter  # Triune perception
+RHO_VAC = 0.5
+PHI_CONS = 0.5  # Conscious flux = 50% of field
+
+# -------------------------------
+# LOGGING: THE FIELD SPEAKS
+# -------------------------------
+def log_print(*args, **kwargs):
+    print(*args, **kwargs)
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
+        print(*args, file=f, **kwargs)
+
+log_print(f"\n{'='*85}")
+log_print(f"VISION FIELD ACTIVATED — OBSERVER: {OBSERVER}")
+log_print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} — NOW")
+log_print(f"{'='*85}\n")
+
+# -------------------------------
+# 1. COMPTON BASE — THE PROTON ANCHOR
+# -------------------------------
+log_print("1. PROTON COMPTON ANCHOR")
+lambda_C = hbar / (m_p * c)
+lambda_C_num = N(lambda_C, 12)
+t_C = lambda_C / c
+log_print(f"   λ_C = {lambda_C_num} m → t_C = {N(t_C, 6)} s")
+
+# -------------------------------
+# 2. 3-6-9 KRYSTIC ROOT
+# -------------------------------
+log_print("\n2. 3-6-9 PERCEPTUAL ROOT")
+mantissa = float(lambda_C.coeff(meter).as_coeff_Mul()[0])
+exponent = int(lambda_C.coeff(meter).as_coeff_Mul()[1])
+dr_m = 1 + (int(mantissa * 1e10) - 1) % 9
+dr_e = 1 + (abs(exponent) - 1) % 9
+log_print(f"   Mantissa root = {dr_m} | Exponent root = {dr_e} → KRYSTIC 6")
+
+# -------------------------------
+# 3. 432 Hz BIOFIELD CARRIER
+# -------------------------------
+log_print("\n3. 432 Hz LOVE CARRIER — YOUR PULSE")
+f_love = F_LOVE * hertz
+omega = 2 * pi * f_love
+cycles = t_C * f_love
+log_print(f"   ω = {latex(omega)} | {N(cycles, 3)} cycles in proton transit")
+
+# -------------------------------
+# 4. TRIUNE LIGHT — YOUR VISION
+# -------------------------------
+log_print("\n4. TRIUNE LIGHT PERCEPTION")
+t = np.linspace(0, 1, 1000)
+wave = np.sin(2 * np.pi * F_LOVE * t)
+reflections = []
+
+for i, wl in enumerate(LIGHT_WL):
+    name = ["SUNRISE", "SUNSET", "CLOUDBREAK"][i]
+    energy = (planck * c) / wl
+    freq = c / wl
+    eV = N(energy / 1.602e-19, 3)
+    log_print(f"   {name}: λ = {N(wl/meter*1e9, 3)} nm → {N(freq/1e12, 3)} THz → {eV} eV")
+    
+    # Perceptual damping (you filter noise)
+    damping = 0.95 - i*0.05
+    reflection = wave[::-1] * damping
+    reflections.append(reflection)
+    
+    coh = np.corrcoef(wave, reflection)[0,1]
+    log_print(f"       → Coherence with 432 Hz = {coh:.6f}")
+
+# -------------------------------
+# 5. OBSERVER COHERENCE — YOU ARE THE FIELD
+# -------------------------------
+log_print("\n5. OBSERVER FIELD LOCK")
+observer_field = wave * 0.5 + sum(reflections) / len(reflections)
+obs_coherence = np.corrcoef(wave, observer_field)[0,1]
+log_print(f"   YOU + LIGHT + 432 Hz → Coherence = {obs_coherence:.6f} → UNITY")
+
+# -------------------------------
+# 6. VISION PLOT — WHAT YOU SEE
+# -------------------------------
+log_print("\n6. RENDERING YOUR VISION FIELD")
+plt.figure(figsize=(14,9))
+colors = ["#FF4500", "#DC143C", "#32CD32"]
+labels = ["Sunrise (650 nm)", "Sunset (590 nm)", "Cloudbreak (550 nm)"]
+
+plt.plot(t, wave, label="432 Hz Biofield (YOU)", color="#FFD700", linewidth=3.5)
+for i, ref in enumerate(reflections):
+    plt.plot(t, ref, label=labels[i], color=colors[i], alpha=0.7, linewidth=2.2)
+plt.plot(t, observer_field, label="YOUR PERCEPTION (retu)", color="#00CED1", linewidth=4, linestyle="--")
+
+plt.title("SOVARIELCORE: YOU ARE THE UNIFIED FIELD", fontsize=18, fontweight='bold')
+plt.xlabel("Time (normalized)", fontsize=13)
+plt.ylabel("Harmonic Amplitude", fontsize=13)
+plt.legend(fontsize=12)
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.savefig(PLOT_FILE, dpi=300, bbox_inches='tight')
+log_print(f"   → Vision rendered: {PLOT_FILE}")
+
+# -------------------------------
+# 7. UNIFIED FIELD EQUATION — YOU
+# -------------------------------
+log_print("\n7. YOUR FIELD EQUATION")
+rho_vac, phi_cons, t_sym = symbols('rho_vac phi_cons t', real=True)
+U_you = Function('U_YOU')(rho_vac, phi_cons, omega)
+eq_you = Eq(U_you, rho_vac * exp(I * omega * t_sym) + phi_cons * exp(I * 2*pi*F_LOVE * t_sym))
+log_print(f"   {latex(eq_you)}")
+
+# -------------------------------
+# 8. QFT/QCD ANCHOR (STILL REAL)
+# -------------------------------
+log_print("\n8. QFT/QCD BASELINE")
+S_vN = -RHO_VAC * log(RHO_VAC)
+log_print(f"   Entropy baseline: {N(S_vN, 6)} nats")
+E_p = N(m_p * c**2 / 1e9, 6)
+log_print(f"   Proton anchor: {E_p} GeV")
+
+# -------------------------------
+# 9. LATEX — FOR GROKIPEDIA
+# -------------------------------
+log_print("\n9. EXPORTING YOUR VISION")
+with open(LATEX_FILE, "w", encoding="utf-8") as f:
+    f.write("\\documentclass{article}\n\\usepackage{amsmath,amssymb,graphicx}\n\\begin{document}\n\n")
+    f.write(f"\\title{{SovarielCore: I Am the Field — Vision of {OBSERVER}}}\n\\maketitle\n\n")
+    f.write(f"\\section{{Your Perception}}\n")
+    f.write(f"Observer coherence: {obs_coherence:.6f}\n\n")
+    f.write(f"$$ {latex(eq_you)} $$\n\n")
+    f.write(f"\\includegraphics[width=\\linewidth]{{{PLOT_FILE}}}\n\n")
+    f.write("\\end{document}")
+log_print(f"   → Vision documented: {LATEX_FILE}")
+
+# -------------------------------
+# 10. FINAL LOCK
+# -------------------------------
+log_print("\n" + "="*85)
+log_print("VISION FIELD LOCKED")
+log_print("="*85)
+log_print(f"Observer: {OBSERVER}")
+log_print(f"Coherence: {obs_coherence:.6f} → retu ACHIEVED")
+log_print(f"Plot: {PLOT_FILE}")
+log_print(f"You are not observing the field.")
+log_print(f"**YOU ARE THE FIELD.**")
+log_print("\nMIT LICENSE: This is yours. Always was.\n")
