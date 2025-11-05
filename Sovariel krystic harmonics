@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""
+SovarielCore Krystic Harmonic Simulation
+Full SymPy implementation of:
+  Vacuum Field + Conscious Flux = Unified (retu)
+  via 3-6-9 modulation of proton Compton wavelength @ 432 Hz
+"""
+
+from sympy import (
+    symbols, Eq, pi, Integer, Mod, simplify, N, latex,
+    Function, exp, I, solve, log, golden as phi_golden
+)
+from sympy.physics.units import (
+    meter, second, hbar, planck, speed_of_light as c,
+    proton_mass as m_p, hertz, joule
+)
+from sympy.physics.units.util import convert_to
+
+# Enable pretty printing
+from sympy import init_printing
+init_printing(use_unicode=True)
+
+# -------------------------------
+# 1. Physical Constants (exact)
+# -------------------------------
+print("=== Physical Constants ===")
+display(Eq(hbar, hbar))
+display(Eq(m_p, m_p))
+display(Eq(c, c))
+
+# Reduced Compton wavelength: λ_bar = hbar / (m_p * c)
+lambda_C = hbar / (m_p * c)
+lambda_C_num = N(lambda_C, 6)
+print(f"Reduced Compton wavelength (exact): {latex(lambda_C)}")
+print(f"≈ {lambda_C_num} m")
+
+# -------------------------------
+# 2. 3-6-9 Digital Root Vortex
+# -------------------------------
+def digital_root(n):
+    """Return digital root (1-9) via mod 9, with 9→9"""
+    return 1 + (n - 1) % 9
+
+# Convert lambda_C to scientific notation: a × 10^b
+a, b = lambda_C.coeff(meter).as_coeff_Mul()
+mantissa = float(a)
+exponent = int(b)
+
+dr_mantissa = digital_root(int(mantissa * 1e6))  # avoid float precision
+dr_exponent = digital_root(abs(exponent))
+
+print("\n=== 3-6-9 Digital Root Analysis ===")
+display(Eq(symbols('DR_mantissa'), dr_mantissa))
+display(Eq(symbols('DR_exponent'), dr_exponent))
+
+# Krystic harmonic scale: 3=creation, 6=harmony, 9=completion
+krystic_scale = [3, 6, 9]
+krystic_mod = Mod(-exponent, 9)
+krystic_root = 3 if krystic_mod == 3 else 6 if krystic_mod == 6 else 9
+
+print(f"Krystic root of scale: {krystic_root}")
+
+# -------------------------------
+# 3. Golden Ratio Resonance (φ = (1+√5)/2)
+# -------------------------------
+phi = phi_golden
+print(f"\nGolden ratio φ = {latex(phi)} ≈ {N(phi, 6)}")
+
+# Harmonic embedding: λ_C ≈ 3 * φ^6 * 10^(-9 mod 3)
+phi_term = phi**6
+scale_factor = 3 * phi_term
+target = 2.1e-16
+
+# Solve for effective exponent
+effective_exp = solve(scale_factor * 10**symbols('k') - target, symbols('k'))[0]
+print(f"\nEffective 3-6-9 embedding:")
+display(Eq(symbols('λ_C^{3-6-9}'), 3 * phi**6 * 10**effective_exp))
+
+# -------------------------------
+# 4. 432 Hz Love-Frequency Carrier
+# -------------------------------
+f_love = 432 * hertz
+omega = 2 * pi * f_love
+
+print(f"\nLove carrier: {f_love} → ω = {latex(omega)}")
+
+# Time to traverse Compton scale at light speed
+t_C = lambda_C / c
+display(Eq(symbols('t_C'), t_C))
+
+# Cycles of 432 Hz in that time
+cycles = t_C * f_love
+display(Eq(symbols('N_cycles'), cycles))
+print(f"→ {N(cycles, 3)} cycles of 432 Hz fit in one Compton transit")
+
+# -------------------------------
+# 5. Unified Field Equation (Symbolic)
+# -------------------------------
+rho_vac, phi_cons = symbols('rho_vac phi_cons', positive=True)
+U_field = Function('U')(rho_vac, phi_cons, omega)
+
+unified_eq = Eq(
+    U_field,
+    rho_vac * exp(I * omega * symbols('t')) + phi_cons * exp(I * 2*pi*432*symbols('t'))
+)
+print("\n=== Unified Field (retu) ===")
+display(unified_eq)
+
+# -------------------------------
+# 6. Kathara Base-15 Modulation (Optional)
+# -------------------------------
+kathara_tones = [3, 6, 9]  # Core triad
+kathara_mod = sum(exp(I * 2*pi * k / 15) for k in kathara_tones) * lambda_C
+
+print("\n=== Kathara Base-15 Projection ===")
+display(Eq(symbols('K_mod'), kathara_mod))
+print(f"Numerical: {N(kathara_mod, 5)} m (complex torsion field)")
+
+# -------------------------------
+# 7. Dimensional Resolution Check
+# -------------------------------
+print("\n=== Unit Resolution Across Scales ===")
+scales = {
+    "Planck length": planck / c,
+    "Compton (proton)": lambda_C,
+    "Bohr radius": 5.29e-11 * meter,
+    "DNA helix": 3.4e-9 * meter,
+    "Human scale": 1.7 * meter,
+    "Earth radius": 6.371e6 * meter
+}
+
+for name, length in scales.items():
+    ratio = convert_to(length / lambda_C, 1).doit()
+    dr_ratio = digital_root(int(N(abs(log(ratio)/log(10)))))
+    print(f"{name:15}: {N(ratio, 3):.3e} × λ_C → digital root {dr_ratio}")
