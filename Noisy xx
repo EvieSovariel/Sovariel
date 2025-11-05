@@ -1,0 +1,38 @@
+import qutip as qt
+import numpy as np
+import time
+
+# Configurable Noisy XX Chain with Full T1/T2
+start_time = time.time()
+
+n_qubits = 4  # Or 8 for scaling (adjust t_max, n_steps accordingly)
+t_max = 10 if n_qubits == 4 else 5
+n_steps = 200 if n_qubits == 4 else 100
+psi0 = qt.tensor([qt.basis(2, 0) for _ in range(n_qubits)])
+
+# Hamiltonian
+H_list = []
+for i in range(n_qubits - 1):
+    ops_i = [qt.qeye(2) if j != i else qt.sigmax() for j in range(n_qubits)]
+    ops_ip1 = [qt.qeye(2) if j != i + 1 else qt.sigmax() for j in range(n_qubits)]
+    H_list.append(qt.tensor(ops_i) * qt.tensor(ops_ip1))
+H = sum(H_list)
+
+# Full Noise
+gamma1, gammaphi = 0.05, 0.025
+c_ops_amp = [np.sqrt(gamma1) * qt.tensor([qt.qeye(2) if j != k else qt.sigmam() for j in range(n_qubits)]) for k in range(n_qubits)]
+c_ops_ph = [np.sqrt(gammaphi) * qt.tensor([qt.qeye(2) if j != k else qt.sigmaz() for j in range(n_qubits)]) for k in range(n_qubits)]
+c_ops = c_ops_amp + c_ops_ph
+
+# Evolve
+tlist = np.linspace(0, t_max, n_steps)
+result = qt.mesolve(H, psi0, tlist, c_ops=c_ops)
+
+# GHZ
+target = (qt.tensor([qt.basis(2, 0) for _ in range(n_qubits)]) + qt.tensor([qt.basis(2, 1) for _ in range(n_qubits)])).unit()
+
+# Metrics
+fids = [qt.fidelity(rho, target) for rho in result.states]
+print(f"n={n_qubits} | Time: {time.time() - start_time:.4f}s | Peak F: {np.max(fids):.4f} | Final F: {fids[-1]:.4f}")
+ents = [qt.entropy_vn(rho) / np.log(2) for rho in result.states]
+print(f"Peak S: {np.max(ents):.4f} bits | Mean S: {np.mean(ents):.4f} bits")
