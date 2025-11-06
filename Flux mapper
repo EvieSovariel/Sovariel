@@ -6,10 +6,12 @@ from matplotlib.animation import FuncAnimation
 import json
 from threading import Thread
 import queue
+import time
+import argparse
 
 # xAI Grok 4 API (streaming-enabled)
 GROK_API_URL = "https://api.x.ai/v1/chat/completions"
-API_KEY = "your_xai_api_key_here"
+API_KEY = "your_xai_api_key_here"  # Swap for real
 
 class FluxInsightCache:
     """Thread-safe cache for Grok insights—reuses to cut calls."""
@@ -28,7 +30,7 @@ async def stream_grok_insights(session, flux_data: dict) -> dict:
     # Sample data for speed: downsample grid to 10x10
     sampled_data = {
         "timestamp": flux_data["timestamp"],
-        "sampled_grid": flux_data["grid"][::5][::5],  # Quick slice
+        "sampled_grid": [row[::5] for row in flux_data["grid"][::5]],  # Quick slice
         "max_flux": flux_data["max_flux"],
         "avg_flux": flux_data["avg_flux"]
     }
@@ -81,12 +83,13 @@ async def grok_heartbeat(cache: FluxInsightCache, flux_queue: queue.Queue):
         while True:
             if not flux_queue.empty():
                 flux_data = flux_queue.get()
-                now = asyncio.get_event_loop().time()
+                now = time.time()  # Sync time for simplicity
                 async with cache.lock:
                     if now - cache.last_update > cache.update_interval:
                         try:
                             insight = await stream_grok_insights(session, flux_data)
-                        except:
+                        except Exception as e:
+                            print(f"Grok hiccup: {e}")  # Graceful
                             insight = local_fallback(flux_data)
                         cache.cache[flux_data["timestamp"]] = insight
                         cache.last_update = now
@@ -96,6 +99,8 @@ def get_cached_insight(cache: FluxInsightCache, t: float) -> dict:
     """Grab nearest insight—interpolate time-wise."""
     async def _async_get():
         async with cache.lock:
+            if not cache.cache:
+                return local_fallback({"grid": np.zeros((50,50))})
             # Simple nearest-match (or add linear interp for flux)
             closest_t = min(cache.cache.keys(), key=lambda kt: abs(kt - t))
             return cache.cache.get(closest_t, local_fallback({"grid": np.zeros((50,50))}))
@@ -108,7 +113,7 @@ def get_cached_insight(cache: FluxInsightCache, t: float) -> dict:
         loop.close()
 
 def simulate_flux_data(t: float) -> dict:
-    """Same sim, but queue-ready."""
+    """Dummy real-time flux gen (replace with sensor read)."""
     x = np.linspace(-5, 5, 50)
     y = np.linspace(-5, 5, 50)
     X, Y = np.meshgrid(x, y)
@@ -120,47 +125,98 @@ def simulate_flux_data(t: float) -> dict:
         "avg_flux": float(np.mean(Z))
     }
 
-def update_flux_map(frame: int, ax, im, flux_queue, cache):
+def update_flux_map(frame: int, ax, im, flux_queue, cache, scatter=None):
     """Frame updater: Sim fast, cache insights, render zippy."""
     t = frame * 0.016  # ~60fps target
     flux_data = simulate_flux_data(t)
     flux_queue.put(flux_data)  # Feed to heartbeat
     
+    start_frame = time.perf_counter()
     insight = get_cached_insight(cache, t)
+    frame_time = (time.perf_counter() - start_frame) * 1000  # ms for logging
+    
     anomaly_score = insight["anomaly_score"]
     
     Z_new = np.array(flux_data["grid"])
     im.set_array(Z_new)
     ax.set_title(f"Flux Stream (t={t:.2f}s) | Anom: {anomaly_score:.2f} | Pred: {insight['prediction'][:20]}...")
     
-    # Hotspots overlay
-    if insight["hotspot_coords"]:
-        hs = np.array(insight["hotspot_coords"])
-        ax.clear()  # Refresh for scatter
-        ax.imshow(Z_new, cmap='plasma', extent=[-5,5,-5,5])
-        ax.scatter(hs[:, 0], hs[:, 1], c='red', s=50, marker='x')
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
+    # Hotspots overlay (clear scatter first to avoid ghosts)
+    if scatter:
+        scatter.remove()
+    hs = np.array(insight["hotspot_coords"][:5])  # Cap for perf
+    if len(hs) > 0:
+        scatter = ax.scatter(hs[:, 0], hs[:, 1], c='red', s=50, marker='x')
+    else:
+        scatter = None
     
-    return [im]
+    print(f"Frame {frame}: {frame_time:.1f}ms")  # Live timing peek
+    return [im, scatter] if scatter else [im]
 
-# Launch: Async heartbeat + sync animation
-flux_queue = queue.Queue()
-cache = FluxInsightCache()
+# Benchmark harness: Headless timing run
+def run_benchmark(num_frames=100):
+    flux_queue = queue.Queue()
+    cache = FluxInsightCache()
+    grok_calls = 0
 
-# Bg thread for async Grok
-def run_heartbeat():
-    asyncio.run(grok_heartbeat(cache, flux_queue))
+    def run_heartbeat():
+        asyncio.run(grok_heartbeat(cache, flux_queue))
 
-heartbeat_thread = Thread(target=run_heartbeat, daemon=True)
-heartbeat_thread.start()
+    heartbeat_thread = Thread(target=run_heartbeat, daemon=True)
+    heartbeat_thread.start()
+    time.sleep(0.1)  # Let it breathe
 
-# Viz setup
-fig, ax = plt.subplots(figsize=(8, 6))
-im = ax.imshow(np.zeros((50,50)), cmap='plasma', extent=[-5,5,-5,5], animated=True)
+    frame_times = []
+    for frame in range(num_frames):
+        t = frame * 0.016
+        flux_data = simulate_flux_data(t)
+        flux_queue.put(flux_data)
+        
+        start_frame = time.perf_counter()
+        insight = get_cached_insight(cache, t)
+        frame_time = (time.perf_counter() - start_frame) * 1000
+        frame_times.append(frame_time)
+        
+        if insight['prediction'] == 'Stable flow':  # Proxy for Grok hit
+            grok_calls += 1
 
-ani = FuncAnimation(fig, update_flux_map, fargs=(ax, im, flux_queue, cache),
-                    interval=16, blit=False, cache_frame_data=False)  # 60fps
-plt.colorbar(im, ax=ax, label='Flux Density')
-plt.tight_layout()
-plt.show()  # Or embed in web app
+    avg_frame = np.mean(frame_times)
+    fps = 1000 / avg_frame
+    print(f"Benchmark ({num_frames} frames): Avg frame {avg_frame:.1f}ms | Est FPS {fps:.0f} | Grok calls ~{grok_calls}")
+
+# Main launcher
+def main(benchmark=False):
+    if benchmark:
+        run_benchmark()
+        return
+
+    flux_queue = queue.Queue()
+    cache = FluxInsightCache()
+
+    # Bg thread for async Grok
+    def run_heartbeat():
+        asyncio.run(grok_heartbeat(cache, flux_queue))
+
+    heartbeat_thread = Thread(target=run_heartbeat, daemon=True)
+    heartbeat_thread.start()
+    time.sleep(0.1)  # Syncopate
+
+    # Viz setup
+    fig, ax = plt.subplots(figsize=(8, 6))
+    flux_data = simulate_flux_data(0)
+    im = ax.imshow(np.array(flux_data["grid"]), cmap='plasma', extent=[-5,5,-5,5], animated=True)
+    scatter = None
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+
+    ani = FuncAnimation(fig, update_flux_map, fargs=(ax, im, flux_queue, cache, scatter),
+                        interval=16, blit=True, cache_frame_data=False)  # 60fps
+    plt.colorbar(im, ax=ax, label='Flux Density')
+    plt.tight_layout()
+    plt.show()
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Low-Latency Flux Mapper")
+    parser.add_argument("--benchmark", action="store_true", help="Run headless benchmark")
+    args = parser.parse_args()
+    main(benchmark=args.benchmark)
