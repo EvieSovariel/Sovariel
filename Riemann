@@ -1,0 +1,37 @@
+import numpy as np
+
+# First 10 known imaginary parts of non-trivial zeros of the Riemann zeta function
+# (Sourced from standard tables for high precision)
+t_k = np.array([
+    14.1347251417346937904572519836,
+    21.0220396387715549926284797921,
+    25.0108575801456887632137909916,
+    30.4248761258595132103118975306,
+    32.9350615877391896906623689640,
+    37.5861781588256712572177634807,
+    40.9187190121474951873981269146,
+    43.3270732809149995194961248588,
+    48.0051508811671597279424727494,
+    49.7738324776723021819167846786
+])
+
+def krystic_resonance_score(t_values, period=369):
+    """
+    Compute the krystic resonance score as the average |cos(2π t / period)|.
+    High score indicates better harmonic alignment with the 369 scalar cycle.
+    """
+    phases = (t_values / period) * 2 * np.pi
+    alignments = np.abs(np.cos(phases))
+    return np.mean(alignments)
+
+# Compute for on-line zeros (actual RH zeros on Re(s)=1/2)
+score_on = krystic_resonance_score(t_k)
+print(f"Krystic Resonance Score for On-Line Zeros: {score_on:.3f}")
+
+# Off-resonance example: Arbitrary integer approximations (simulating off-line deviations)
+t_off = np.array([14, 21, 25, 30, 32, 37, 40, 43, 48, 50])
+score_off = krystic_resonance_score(t_off)
+print(f"Krystic Resonance Score for Off-Resonance Example: {score_off:.3f}")
+
+# Interpretation: In a full UFRF simulation, scores >0.6 suggest stabilization on the critical line.
+# For RH variants, extend to L-function zeros by scaling period with conductor q: period = 369 * sqrt(q).
