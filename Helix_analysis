@@ -1,0 +1,28 @@
+import numpy as np
+from scipy.stats import entropy  # Requires scipy installation
+
+# Load first 20 zeros (assumes t_k from krystic_resonance.py)
+t_k_20 = t_k[:20]
+
+# Concatenate into string without decimals
+concat_string = ''.join([str(int(float(t) * 10**10)).zfill(10) for t in t_k_20])
+print("Concatenated string (first 50 chars):", concat_string[:50])
+
+# Compute autocorrelation
+autocorr = np.correlate(list(map(int, concat_string)), list(map(int, concat_string)), mode='full')
+autocorr_normalized = autocorr[len(concat_string)-1:] / len(concat_string)
+print(f"Autocorrelation at lag 3: {autocorr_normalized[3]:.3f}")
+
+# Compute entropy
+entropy_concat = entropy(np.unique(list(concat_string), return_counts=True)[1] / len(concat_string))
+random_string = ''.join(map(str, np.random.randint(0, 10, len(concat_string))))
+entropy_random = entropy(np.unique(list(random_string), return_counts=True)[1] / len(random_string))
+print(f"Entropy of concatenated string: {entropy_concat:.3f}")
+print(f"Entropy of random string: {entropy_random:.3f}")
+
+# Extend to 100 zeros
+t_k_100 = t_k[:100]
+concat_string_100 = ''.join([str(int(float(t) * 10**10)).zfill(10) for t in t_k_100])
+autocorr_100 = np.correlate(list(map(int, concat_string_100)), list(map(int, concat_string_100)), mode='full')
+autocorr_normalized_100 = autocorr_100[len(concat_string_100)-1:] / len(concat_string_100)
+print(f"Autocorrelation at lag 3 (100 zeros): {autocorr_normalized_100[3]:.3f}")
