@@ -1,0 +1,80 @@
+import numpy as np
+from mpmath import mp, zetazero
+import pennylane as qml  # For quantum extension
+
+# Set precision for mpmath
+mp.dps = 50  # High precision
+
+# First 10 zeta zero imaginary parts (fallback; extend via zetazero if needed)
+t_k = np.array([
+    14.1347251417346937904572519836,
+    21.0220396387715549926284797921,
+    25.0108575801456887632137909916,
+    30.4248761258595132103118975306,
+    32.9350615877391896906623689640,
+    37.5861781588256712572177634807,
+    40.9187190121474951873981269146,
+    43.3270732809149995194961248588,
+    48.0051508811671597279424727494,
+    49.7738324776723021819167846786
+])
+
+def krystic_resonance_score(t_values, period=369, sigma=0.5, lambda_penalty=10):
+    """Basic krystic resonance score for RH."""
+    phases = (t_values / period) * 2 * np.pi
+    alignments = np.abs(np.cos(phases))
+    penalty = np.exp(-abs(sigma - 0.5) * lambda_penalty)
+    return np.mean(alignments) * penalty
+
+def generalized_krystic_resonance_score(t_values, q=1, period=369, sigma=0.5, lambda_penalty=10):
+    """Generalized for GRH, scaling period with sqrt(q)."""
+    scaled_period = period * np.sqrt(q)
+    phases = np.array(t_values) / scaled_period * 2 * np.pi
+    alignments = np.abs(np.cos(phases))
+    penalty = np.exp(-np.abs(sigma - 0.5) * lambda_penalty)
+    return np.mean(alignments) * penalty
+
+# Classical Benchmarks
+print("=== Classical RH Benchmark ===")
+score_on = krystic_resonance_score(t_k)
+print(f"On-Line Score: {score_on:.3f}")
+
+score_off = krystic_resonance_score(t_k, sigma=0.6)
+print(f"Off-Line Score (sigma=0.6): {score_off:.3f}")
+
+np.random.seed(42)
+phases_random = np.random.uniform(0, 2*np.pi, len(t_k))
+score_random = np.mean(np.abs(np.cos(phases_random)))
+print(f"Random Baseline: {score_random:.3f}")
+
+print("\n=== GRH Extension ===")
+t_l3 = np.array([6.0208, 12.9140, 19.4225, 24.6976, 30.8350])  # q=3 zeros
+score_zeta = generalized_krystic_resonance_score(t_k[:5], q=1)  # Subset for fair N=5
+score_l3 = generalized_krystic_resonance_score(t_l3, q=3)
+print(f"Zeta (q=1, N=5) Score: {score_zeta:.3f}")
+print(f"GRH (q=3) Score: {score_l3:.3f}")
+
+np.random.seed(42)
+phases_random_grh = np.random.uniform(0, 2 * np.pi, 5)
+score_random_grh = np.mean(np.abs(np.cos(phases_random_grh)))
+print(f"Random Baseline (N=5): {score_random_grh:.3f}")
+
+# Mean spacing example
+spacings = np.diff(t_k)
+mean_spacing = np.mean(spacings)
+print(f"\nMean Nearest-Neighbor Spacing: {mean_spacing:.3f}")
+
+# Quantum VQE Prototype (Comment out if PennyLane not installed)
+# dev = qml.device('default.qubit', wires=4)
+#
+# @qml.qnode(dev)
+# def circuit(params, t, q=1, period=369):
+#     scaled_period = period * np.sqrt(q)
+#     angle = 2 * np.pi * (t / scaled_period)
+#     for i in range(4):
+#         qml.RY(angle, wires=i)
+#     qml.BasicEntanglerLayers(params, wires=range(4))
+#     return qml.expval(qml.PauliZ(0))
+#
+# # Example run: params = np.random.random(4*4); expect = circuit(params, t_k[0])
+# # print(f"Sample Expectation: {expect:.3f}")
