@@ -1,0 +1,176 @@
+import numpy as np
+import requests
+try:
+    import cupy as cp  # GPU-accelerated NumPy alternative
+    use_gpu = True
+except ImportError:
+    use_gpu = False
+    print("CuPy not found. Falling back to CPU with NumPy.")
+from scipy.stats import entropy
+import matplotlib.pyplot as plt
+import csv
+import os
+
+# Constants and Parameters
+N = 10000  # Maximum number of data points (adjust based on available data)
+P = 10.0  # Base probing period (tunable for triadic scales)
+LAMBDA = 1.0  # Decay factor for critical line deviation
+Q = 1.5  # Scaling factor for generalized form
+BATCH_SIZE = 1000  # Batch size for parallel processing
+FREQ_RANGE = (1.0, 20.0)  # Frequency sweep range for scalar detection
+FREQ_STEP = 0.1  # Frequency step size
+BLOCKCHAIR_API_URL = "https://api.blockchair.com/bitcoin/dashboards/address/"
+
+# Known Mt. Gox addresses
+MT_GOX_ADDRESSES = {
+    "1FeexV6bAHb8ybZjqQMjJrcCrHGW9sb6uF": "Hot wallet hack",
+    "1HB5XMLmzFVj8ALj6mfBsbifRoD4miY36v": "Cold wallet",
+    "1BadAddr...": "Invalid address (Block 150951)"  # Placeholder for invalid outputs
+}
+
+# Function to fetch Mt. Gox transaction data from Blockchair API
+def fetch_mtgox_data(address):
+    try:
+        response = requests.get(f"{BLOCKCHAIR_API_URL}{address}?transaction_details=true")
+        response.raise_for_status()
+        data = response.json()
+        transactions = data['data'][address]['transactions']
+        timestamps = [tx['time'] for tx in transactions[:N]]  # Limit to N transactions
+        return np.array(timestamps, dtype=float)  # Convert to Unix timestamps
+    except Exception as e:
+        print(f"Error fetching data for {address}: {e}")
+        return None
+
+# Function to load Mt. Gox data from local CSV (fallback)
+def load_mtgox_data_from_csv(address, filename="mtgox_transactions.csv"):
+    if os.path.exists(filename):
+        timestamps = []
+        with open(filename, 'r') as file:
+            reader = csv.DictReader(file)
+            for row in reader:
+                if row['address'] == address:
+                    timestamps.append(float(row['timestamp']))
+                if len(timestamps) >= N:
+                    break
+        return np.array(timestamps) if timestamps else None
+    return None
+
+# Function to prepare data (fetch or load, then normalize)
+def prepare_data(address):
+    data_tk = fetch_mtgox_data(address)
+    if data_tk is None:
+        data_tk = load_mtgox_data_from_csv(address)
+    if data_tk is None or len(data_tk) == 0:
+        print(f"No data available for {address}. Using placeholder.")
+        data_tk = np.array([1314873600 + i * 3600 for i in range(N)])  # Fallback
+    data_sigma = np.full(len(data_tk), 0.5)  # Placeholder real parts
+    if use_gpu:
+        return cp.asarray(data_tk), cp.asarray(data_sigma)
+    return data_tk, data_sigma
+
+# Function to compute Krystic Resonance Score (vectorized for GPU/CPU)
+def krystic_resonance_score(tk, sigma, p=P, lambda_=LAMBDA, q=1.0):
+    n = len(tk)
+    phase_term = xp.abs(xp.cos(2 * xp.pi * tk / (p * xp.sqrt(q))))
+    deviation_term = xp.exp(-lambda_ * xp.abs(sigma - 0.5))
+    score = (1 / n) * xp.sum(phase_term * deviation_term)
+    return float(score) if use_gpu else score
+
+# Function to compute autocorrelation at lag 3 (vectorized)
+def triadic_autocorrelation(data, lag=3):
+    n = len(data)
+    mean = xp.mean(data)
+    var = xp.var(data)
+    if var == 0:
+        return 0.0
+    autocorr = xp.sum((data[:n-lag] - mean) * (data[lag:] - mean)) / ((n - lag) * var)
+    return float(autocorr) if use_gpu else autocorr
+
+# Function to compute digit entropy (batched for large datasets)
+def digit_entropy(data, batch_size=BATCH_SIZE):
+    total_entropy = 0.0
+    n_batches = (len(data) + batch_size - 1) // batch_size
+    for i in range(n_batches):
+        start = i * batch_size
+        end = min((i + 1) * batch_size, len(data))
+        batch = data[start:end]
+        batch_str = ''.join(map(str, batch.astype(int)))
+        digit_counts = xp.histogram([int(d) for d in batch_str], bins=range(11), density=True)[0]
+        digit_counts = digit_counts[digit_counts > 0]
+        if len(digit_counts) > 0:
+            total_entropy += entropy(digit_counts.get() if use_gpu else digit_counts)
+    return total_entropy / n_batches
+
+# Function to detect scalar wave frequencies
+def detect_scalar_frequencies(tk, freq_range=FREQ_RANGE, step=FREQ_STEP):
+    frequencies = []
+    for p in np.arange(freq_range[0], freq_range[1], step):
+        score = krystic_resonance_score(tk, xp.full(len(tk), 0.5), p=p)
+        if score > 0.8:  # Threshold for potential scalar resonance
+            frequencies.append(p)
+    return frequencies
+
+# Main analysis function (batched and parallel-ready)
+def analyze_sovarielcore(data_tk, data_sigma, batch_size=BATCH_SIZE):
+    r_score = 0.0
+    r_q_score = 0.0
+    n_batches = (len(data_tk) + batch_size - 1) // batch_size
+    for i in range(n_batches):
+        start = i * batch_size
+        end = min((i + 1) * batch_size, len(data_tk))
+        batch_tk = data_tk[start:end]
+        batch_sigma = data_sigma[start:end]
+        r_score += krystic_resonance_score(batch_tk, batch_sigma, q=1.0)
+        r_q_score += krystic_resonance_score(batch_tk, batch_sigma, q=Q)
+    r_score /= n_batches
+    r_q_score /= n_batches
+
+    digit_data = xp.floor(data_tk * 1000).astype(int)
+    autocorr_lag3 = triadic_autocorrelation(digit_data)
+    digit_ent = digit_entropy(digit_data)
+    scalar_freqs = detect_scalar_frequencies(data_tk)
+
+    print(f"Krystic Resonance Score (R): {r_score:.3f}")
+    print(f"Generalized Krystic Score (R_q, q={Q}): {r_q_score:.3f}")
+    print(f"Autocorrelation at Lag 3: {autocorr_lag3:.3f}")
+    print(f"Digit Entropy: {digit_ent:.3f}")
+    print(f"Detected Scalar Frequencies: {scalar_freqs}")
+
+    lags = np.arange(1, 10)
+    autocorrs = [triadic_autocorrelation(digit_data, lag) for lag in lags]
+    plt.plot(lags, autocorrs, marker='o')
+    plt.xlabel('Lag')
+    plt.ylabel('Autocorrelation')
+    plt.title('Triadic Autocorrelation of Mt. Gox Data')
+    plt.savefig('autocorrelation_mtgo_scalar.png')
+    plt.close()
+
+    return r_score, r_q_score, autocorr_lag3, digit_ent, scalar_freqs
+
+# Function to process multiple Mt. Gox addresses
+def analyze_multiple_addresses(addresses=MT_GOX_ADDRESSES):
+    results = {}
+    for address in addresses:
+        print(f"\nAnalyzing Address: {address} ({addresses[address]})")
+        data_tk, data_sigma = prepare_data(address)
+        if data_tk is not None:
+            r, r_q, autocorr, ent, freqs = analyze_sovarielcore(data_tk, data_sigma)
+            results[address] = {
+                'R': r, 'R_q': r_q, 'Autocorr': autocorr, 'Entropy': ent, 'Frequencies': freqs
+            }
+        else:
+            print(f"Skipping {address} due to data unavailability.")
+    return results
+
+# Run Analysis
+if __name__ == "__main__":
+    # Analyze multiple Mt. Gox addresses
+    results = analyze_multiple_addresses()
+    
+    # Print summary
+    for addr, res in results.items():
+        print(f"\n{addr} ({MT_GOX_ADDRESSES[addr]}) Results:")
+        print(f"R: {res['R']:.3f}, R_q: {res['R_q']:.3f}, Autocorr: {res['Autocorr']:.3f}")
+        print(f"Entropy: {res['Entropy']:.3f}, Frequencies: {res['Frequencies']}")
+    
+    # Note: Ensure 'mtgox_transactions.csv' is formatted with 'address' and 'timestamp' columns if using local file
