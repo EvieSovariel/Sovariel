@@ -1,0 +1,89 @@
+import asyncio
+import aiohttp
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+import json
+
+# xAI Grok 4 API endpoint (check docs for latest)
+GROK_API_URL = "https://api.x.ai/v1/chat/completions"  # Hypothetical; verify at x.ai/api
+API_KEY = "your_xai_api_key_here"  # Secure this!
+
+async def query_grok_for_flux_analysis(flux_data: dict) -> str:
+    """Send flux snapshot to Grok 4 for real-time insights."""
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "grok-4",  # Specify Grok 4
+        "messages": [
+            {"role": "system", "content": "You are a flux mapping expert. Analyze this real-time magnetic flux data for anomalies, gradients, and predictive flow. Output JSON: {'anomaly_score': float, 'hotspot_coords': list, 'prediction': str}."},
+            {"role": "user", "content": json.dumps(flux_data)}
+        ],
+        "max_tokens": 200,
+        "temperature": 0.3  # Low for precise mapping
+    }
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.post(GROK_API_URL, headers=headers, json=payload) as resp:
+            if resp.status == 200:
+                result = await resp.json()
+                return result["choices"][0]["message"]["content"]
+            else:
+                raise ValueError(f"Grok API error: {resp.status}")
+
+def simulate_flux_data(t: float) -> dict:
+    """Dummy real-time flux gen (replace with sensor read)."""
+    x = np.linspace(-5, 5, 50)
+    y = np.linspace(-5, 5, 50)
+    X, Y = np.meshgrid(x, y)
+    Z = np.sin(np.sqrt(X**2 + Y**2) + t) * np.exp(-0.1 * (X**2 + Y**2))  # Flux density
+    return {
+        "timestamp": t,
+        "grid": Z.tolist(),  # Flatten or sample as needed
+        "max_flux": float(np.max(Z)),
+        "avg_flux": float(np.mean(Z))
+    }
+
+def update_flux_map(frame: int, ax, im):
+    """Animate the map with Grok insights overlaid."""
+    t = frame * 0.1
+    flux_data = simulate_flux_data(t)
+    
+    # Async Grok query (non-blocking)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    insights = loop.run_until_complete(query_grok_for_flux_analysis(flux_data))
+    loop.close()
+    
+    # Parse Grok's JSON response
+    try:
+        insight_dict = json.loads(insights)
+        anomaly_score = insight_dict.get('anomaly_score', 0)
+    except:
+        anomaly_score = 0
+    
+    # Update viz
+    Z_new = np.array(flux_data["grid"])
+    im.set_array(Z_new)
+    ax.set_title(f"Real-Time Flux Map (t={t:.1f}s) | Anomaly: {anomaly_score:.2f}")
+    
+    # Overlay hotspots from Grok
+    if 'hotspot_coords' in insight_dict:
+        hotspots = np.array(insight_dict['hotspot_coords'])
+        ax.scatter(hotspots[:, 0], hotspots[:, 1], c='red', s=50, marker='x')
+    
+    return [im]
+
+# Run the live mapper
+fig, ax = plt.subplots(figsize=(8, 6))
+flux_data = simulate_flux_data(0)
+im = ax.imshow(np.array(flux_data["grid"]), cmap='plasma', animated=True)
+ax.set_xlabel('X (units)')
+ax.set_ylabel('Y (units)')
+
+ani = FuncAnimation(fig, update_flux_map, fargs=(ax, im), interval=100, blit=True, cache_frame_data=False)
+plt.colorbar(im, ax=ax, label='Flux Density')
+plt.tight_layout()
+plt.show()  # Or stream to web via Dash/Streamlit
