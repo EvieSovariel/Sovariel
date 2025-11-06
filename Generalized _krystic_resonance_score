@@ -1,0 +1,28 @@
+import numpy as np
+
+# Define generalized krystic resonance score function
+def generalized_krystic_resonance_score(t_values, q=1, period=369, sigma=0.5, lambda_penalty=10):
+    scaled_period = period * np.sqrt(q)
+    phases = np.array(t_values) / scaled_period * 2 * np.pi
+    alignments = np.abs(np.cos(phases))
+    penalty = np.exp(-np.abs(sigma - 0.5) * lambda_penalty)
+    return np.mean(alignments) * penalty
+
+# Test multiple q values with LMFDB-sourced zeros
+q_values = [4, 7, 13]
+t_q4 = np.array([3.1761, 7.1306])          # q=4 zeros
+t_q7 = np.array([4.8587, 9.8316, 14.9060, 19.9628, 23.7674])  # q=7 zeros
+t_q13 = np.array([5.2292, 10.3616])        # q=13 zeros
+t_values = [t_q4, t_q7, t_q13]
+
+scores = {q: generalized_krystic_resonance_score(t, q) for q, t in zip(q_values, t_values)}
+
+# Print results
+for q, score in scores.items():
+    print(f"Score for q={q}: {score:.3f}")
+
+# Random baseline (match max N=5)
+np.random.seed(42)
+phases_random = np.random.uniform(0, 2 * np.pi, 5)
+score_random = np.mean(np.abs(np.cos(phases_random)))
+print(f"Random Baseline (N=5): {score_random:.3f}")
