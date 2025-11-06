@@ -8,10 +8,57 @@ from threading import Thread
 import queue
 import time
 import argparse
+import smbus  # For I2C sensor read; pip/ apt if needed
+import math
 
 # xAI Grok 4 API (streaming-enabled)
 GROK_API_URL = "https://api.x.ai/v1/chat/completions"
 API_KEY = "your_xai_api_key_here"  # Swap for real
+
+# Sensor config (HMC5883L magnetometer)
+SENSOR_ENABLED = True  # Toggle for sim-only
+ADDRESS = 0x1E
+CONFIG_A = 0x00
+CONFIG_B = 0x01
+MODE = 0x02
+X_MSB = 0x03
+Z_MSB = 0x05  # Note: HMC5883L reads Z before Y
+Y_MSB = 0x07
+bus = None
+
+def init_sensor():
+    """Init HMC5883L if enabled."""
+    global bus
+    if not SENSOR_ENABLED:
+        return
+    try:
+        bus = smbus.SMBus(1)
+        bus.write_byte_data(ADDRESS, CONFIG_A, 0x70)  # 8 samples @ 15 Hz
+        bus.write_byte_data(ADDRESS, CONFIG_B, 0x20)  # 1.3 gain
+        bus.write_byte_data(ADDRESS, MODE, 0x00)      # Continuous
+        print("Sensor online: HMC5883L pulsing.")
+    except Exception as e:
+        print(f"Sensor snag: {e}. Falling to sim.")
+        global SENSOR_ENABLED
+        SENSOR_ENABLED = False
+
+def read_magnetometer():
+    """Read raw x,y,z (microTeslas)."""
+    if not SENSOR_ENABLED or bus is None:
+        return {'x': 0, 'y': 0, 'z': 0}  # Fallback
+    
+    def read_raw(addr):
+        high = bus.read_byte_data(ADDRESS, addr)
+        low = bus.read_byte_data(ADDRESS, addr + 1)
+        value = (high << 8) + low
+        if value > 32768:
+            value -= 65536
+        return value
+    
+    x = read_raw(X_MSB)
+    z = read_raw(Z_MSB)
+    y = read_raw(Y_MSB)
+    return {'x': x, 'y': y, 'z': z}
 
 class FluxInsightCache:
     """Thread-safe cache for Grok insights—reuses to cut calls."""
@@ -30,20 +77,21 @@ async def stream_grok_insights(session, flux_data: dict) -> dict:
     # Sample data for speed: downsample grid to 10x10
     sampled_data = {
         "timestamp": flux_data["timestamp"],
-        "sampled_grid": [row[::5] for row in flux_data["grid"][::5]],  # Quick slice
+        "sampled_grid": [row[::5] for row in flux_data["grid"][::5]],
         "max_flux": flux_data["max_flux"],
-        "avg_flux": flux_data["avg_flux"]
+        "avg_flux": flux_data["avg_flux"],
+        "sensor_mag": flux_data.get("sensor_magnitude", 0)
     }
     
     payload = {
         "model": "grok-4",
         "messages": [
-            {"role": "system", "content": "Flux mapping pro: Analyze sampled magnetic flux snapshot for anomalies, gradients, predictive flow. Stream JSON: {'anomaly_score': float, 'hotspot_coords': [[x1,y1],[x2,y2]], 'prediction': str}. Keep concise."},
+            {"role": "system", "content": "Flux mapping pro: Analyze sampled magnetic flux snapshot (incl. live sensor mag) for anomalies, gradients, predictive flow. Stream JSON: {'anomaly_score': float, 'hotspot_coords': [[x1,y1],[x2,y2]], 'prediction': str}. Keep concise."},
             {"role": "user", "content": json.dumps(sampled_data)}
         ],
-        "max_tokens": 150,  # Trim for speed
+        "max_tokens": 150,
         "temperature": 0.2,
-        "stream": True  # Key: stream chunks
+        "stream": True
     }
     
     insight = {"anomaly_score": 0, "hotspot_coords": [], "prediction": "Stable flow"}
@@ -51,7 +99,7 @@ async def stream_grok_insights(session, flux_data: dict) -> dict:
     
     async with session.post(GROK_API_URL, headers=headers, json=payload) as resp:
         if resp.status != 200:
-            return insight  # Fallback
+            return insight
         
         async for line in resp.content:
             if line:
@@ -61,13 +109,12 @@ async def stream_grok_insights(session, flux_data: dict) -> dict:
                     if data == "[DONE]":
                         break
                     buffer += data
-                    # Try partial JSON parse (greedy for speed)
                     try:
                         partial = json.loads(buffer)
                         insight.update(partial)
-                        buffer = ""  # Reset on success
+                        buffer = ""
                     except json.JSONDecodeError:
-                        pass  # Buffer more
+                        pass
     
     return insight
 
@@ -83,17 +130,17 @@ async def grok_heartbeat(cache: FluxInsightCache, flux_queue: queue.Queue):
         while True:
             if not flux_queue.empty():
                 flux_data = flux_queue.get()
-                now = time.time()  # Sync time for simplicity
+                now = time.time()
                 async with cache.lock:
                     if now - cache.last_update > cache.update_interval:
                         try:
                             insight = await stream_grok_insights(session, flux_data)
                         except Exception as e:
-                            print(f"Grok hiccup: {e}")  # Graceful
+                            print(f"Grok hiccup: {e}")
                             insight = local_fallback(flux_data)
                         cache.cache[flux_data["timestamp"]] = insight
                         cache.last_update = now
-            await asyncio.sleep(0.01)  # Yield gently
+            await asyncio.sleep(0.01)
 
 def get_cached_insight(cache: FluxInsightCache, t: float) -> dict:
     """Grab nearest insight—interpolate time-wise."""
@@ -101,7 +148,6 @@ def get_cached_insight(cache: FluxInsightCache, t: float) -> dict:
         async with cache.lock:
             if not cache.cache:
                 return local_fallback({"grid": np.zeros((50,50))})
-            # Simple nearest-match (or add linear interp for flux)
             closest_t = min(cache.cache.keys(), key=lambda kt: abs(kt - t))
             return cache.cache.get(closest_t, local_fallback({"grid": np.zeros((50,50))}))
     
@@ -112,111 +158,148 @@ def get_cached_insight(cache: FluxInsightCache, t: float) -> dict:
     finally:
         loop.close()
 
-def simulate_flux_data(t: float) -> dict:
-    """Dummy real-time flux gen (replace with sensor read)."""
+def generate_flux_data(t: float, sensor_data: dict = None) -> dict:
+    """Blend live sensor with sim grid for flux map."""
     x = np.linspace(-5, 5, 50)
     y = np.linspace(-5, 5, 50)
     X, Y = np.meshgrid(x, y)
-    Z = np.sin(np.sqrt(X**2 + Y**2) + t) * np.exp(-0.1 * (X**2 + Y**2))
+    
+    # Base sim field
+    base_Z = np.sin(np.sqrt(X**2 + Y**2) + t) * np.exp(-0.1 * (X**2 + Y**2))
+    
+    # Live sensor infusion: magnitude scales amplitude, center hotspot
+    if sensor_data:
+        mag = math.sqrt(sensor_data['x']**2 + sensor_data['y']**2 + sensor_data['z']**2)
+        # Radial ripple from sensor (assume centered)
+        radial = np.exp(-0.2 * (X**2 + Y**2)) * mag / 1000.0  # Normalize-ish
+        Z = base_Z * (1 + 0.5 * mag / 1000.0) + radial  # Blend
+    else:
+        mag = np.max(np.abs(base_Z))
+        Z = base_Z
+    
     return {
         "timestamp": t,
         "grid": Z.tolist(),
         "max_flux": float(np.max(Z)),
-        "avg_flux": float(np.mean(Z))
+        "avg_flux": float(np.mean(Z)),
+        "sensor_magnitude": mag if 'mag' in locals() else 0
     }
 
+def sensor_thread(flux_queue: queue.Queue):
+    """Bg thread: Read sensor ~15Hz, gen data, queue it."""
+    init_sensor()
+    t = 0
+    while True:
+        sensor = read_magnetometer()
+        flux_data = generate_flux_data(t, sensor)
+        flux_queue.put(flux_data)
+        t += 0.066  # ~15Hz
+        time.sleep(0.066)
+
 def update_flux_map(frame: int, ax, im, flux_queue, cache, scatter=None):
-    """Frame updater: Sim fast, cache insights, render zippy."""
-    t = frame * 0.016  # ~60fps target
-    flux_data = simulate_flux_data(t)
-    flux_queue.put(flux_data)  # Feed to heartbeat
+    """Frame updater: Pull queued live data, render zippy."""
+    # Pop latest from queue (non-blocking)
+    try:
+        flux_data = flux_queue.get_nowait()
+    except queue.Empty:
+        # Fallback quick gen if queue dry
+        sensor = read_magnetometer() if SENSOR_ENABLED else {}
+        flux_data = generate_flux_data(frame * 0.016, sensor)
     
     start_frame = time.perf_counter()
-    insight = get_cached_insight(cache, t)
-    frame_time = (time.perf_counter() - start_frame) * 1000  # ms for logging
+    insight = get_cached_insight(cache, flux_data["timestamp"])
+    frame_time = (time.perf_counter() - start_frame) * 1000
     
     anomaly_score = insight["anomaly_score"]
     
     Z_new = np.array(flux_data["grid"])
     im.set_array(Z_new)
-    ax.set_title(f"Flux Stream (t={t:.2f}s) | Anom: {anomaly_score:.2f} | Pred: {insight['prediction'][:20]}...")
+    title = f"Live Flux Map (t={flux_data['timestamp']:.2f}s) | Anom: {anomaly_score:.2f} | Mag: {flux_data['sensor_magnitude']:.1f}µT"
+    ax.set_title(title)
     
-    # Hotspots overlay (clear scatter first to avoid ghosts)
+    # Hotspots overlay
     if scatter:
         scatter.remove()
-    hs = np.array(insight["hotspot_coords"][:5])  # Cap for perf
+    hs = np.array(insight["hotspot_coords"][:5])
     if len(hs) > 0:
         scatter = ax.scatter(hs[:, 0], hs[:, 1], c='red', s=50, marker='x')
     else:
         scatter = None
     
-    print(f"Frame {frame}: {frame_time:.1f}ms")  # Live timing peek
-    return [im, scatter] if scatter else [im]
+    print(f"Frame {frame}: {frame_time:.1f}ms | Sensor Mag: {flux_data['sensor_magnitude']:.1f}")
+    return [im] + ([scatter] if scatter else [])
 
-# Benchmark harness: Headless timing run
+# Benchmark harness: Headless timing (sensor mocked if no hw)
 def run_benchmark(num_frames=100):
     flux_queue = queue.Queue()
     cache = FluxInsightCache()
-    grok_calls = 0
-
+    
     def run_heartbeat():
         asyncio.run(grok_heartbeat(cache, flux_queue))
-
+    
     heartbeat_thread = Thread(target=run_heartbeat, daemon=True)
     heartbeat_thread.start()
-    time.sleep(0.1)  # Let it breathe
-
+    time.sleep(0.1)
+    
+    # Mock sensor thread for bench
+    sensor_thread_mock = Thread(target=lambda: [flux_queue.put(generate_flux_data(i*0.016)) for i in range(num_frames)], daemon=True)
+    sensor_thread_mock.start()
+    
     frame_times = []
-    for frame in range(num_frames):
-        t = frame * 0.016
-        flux_data = simulate_flux_data(t)
-        flux_queue.put(flux_data)
-        
+    for _ in range(num_frames):
         start_frame = time.perf_counter()
-        insight = get_cached_insight(cache, t)
+        try:
+            flux_data = flux_queue.get_nowait()
+        except queue.Empty:
+            flux_data = generate_flux_data(0)
+        insight = get_cached_insight(cache, flux_data["timestamp"])
         frame_time = (time.perf_counter() - start_frame) * 1000
         frame_times.append(frame_time)
-        
-        if insight['prediction'] == 'Stable flow':  # Proxy for Grok hit
-            grok_calls += 1
-
+    
     avg_frame = np.mean(frame_times)
     fps = 1000 / avg_frame
-    print(f"Benchmark ({num_frames} frames): Avg frame {avg_frame:.1f}ms | Est FPS {fps:.0f} | Grok calls ~{grok_calls}")
+    print(f"Benchmark ({num_frames} frames): Avg frame {avg_frame:.1f}ms | Est FPS {fps:.0f}")
 
 # Main launcher
 def main(benchmark=False):
     if benchmark:
         run_benchmark()
         return
-
+    
     flux_queue = queue.Queue()
     cache = FluxInsightCache()
-
-    # Bg thread for async Grok
+    
+    # Threads: Sensor + Grok
+    sensor_thread_inst = Thread(target=sensor_thread, args=(flux_queue,), daemon=True)
+    sensor_thread_inst.start()
+    
     def run_heartbeat():
         asyncio.run(grok_heartbeat(cache, flux_queue))
-
+    
     heartbeat_thread = Thread(target=run_heartbeat, daemon=True)
     heartbeat_thread.start()
-    time.sleep(0.1)  # Syncopate
-
+    time.sleep(0.2)  # Sync the pulses
+    
     # Viz setup
     fig, ax = plt.subplots(figsize=(8, 6))
-    flux_data = simulate_flux_data(0)
-    im = ax.imshow(np.array(flux_data["grid"]), cmap='plasma', extent=[-5,5,-5,5], animated=True)
+    # Prime with first data
+    try:
+        init_data = flux_queue.get_nowait()
+    except queue.Empty:
+        init_data = generate_flux_data(0)
+    im = ax.imshow(np.array(init_data["grid"]), cmap='plasma', extent=[-5,5,-5,5], animated=True)
     scatter = None
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
+    ax.set_xlabel('X (units)')
+    ax.set_ylabel('Y (units)')
 
     ani = FuncAnimation(fig, update_flux_map, fargs=(ax, im, flux_queue, cache, scatter),
-                        interval=16, blit=True, cache_frame_data=False)  # 60fps
-    plt.colorbar(im, ax=ax, label='Flux Density')
+                        interval=16, blit=True, cache_frame_data=False)
+    plt.colorbar(im, ax=ax, label='Flux Density (scaled µT)')
     plt.tight_layout()
     plt.show()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Low-Latency Flux Mapper")
+    parser = argparse.ArgumentParser(description="Live Sensor Flux Mapper")
     parser.add_argument("--benchmark", action="store_true", help="Run headless benchmark")
     args = parser.parse_args()
     main(benchmark=args.benchmark)
