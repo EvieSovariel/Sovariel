@@ -4,86 +4,163 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import json
+from threading import Thread
+import queue
 
-# xAI Grok 4 API endpoint (check docs for latest)
-GROK_API_URL = "https://api.x.ai/v1/chat/completions"  # Hypothetical; verify at x.ai/api
-API_KEY = "your_xai_api_key_here"  # Secure this!
+# xAI Grok 4 API (streaming-enabled)
+GROK_API_URL = "https://api.x.ai/v1/chat/completions"
+API_KEY = "your_xai_api_key_here"
 
-async def query_grok_for_flux_analysis(flux_data: dict) -> str:
-    """Send flux snapshot to Grok 4 for real-time insights."""
+class FluxInsightCache:
+    """Thread-safe cache for Grok insights—reuses to cut calls."""
+    def __init__(self):
+        self.cache = {}
+        self.lock = asyncio.Lock()
+        self.last_update = 0
+        self.update_interval = 0.5  # Seconds between Grok pings
+
+async def stream_grok_insights(session, flux_data: dict) -> dict:
+    """Stream Grok for flux analysis—parse JSON chunks on the fly."""
     headers = {
         "Authorization": f"Bearer {API_KEY}",
         "Content-Type": "application/json"
     }
-    payload = {
-        "model": "grok-4",  # Specify Grok 4
-        "messages": [
-            {"role": "system", "content": "You are a flux mapping expert. Analyze this real-time magnetic flux data for anomalies, gradients, and predictive flow. Output JSON: {'anomaly_score': float, 'hotspot_coords': list, 'prediction': str}."},
-            {"role": "user", "content": json.dumps(flux_data)}
-        ],
-        "max_tokens": 200,
-        "temperature": 0.3  # Low for precise mapping
+    # Sample data for speed: downsample grid to 10x10
+    sampled_data = {
+        "timestamp": flux_data["timestamp"],
+        "sampled_grid": flux_data["grid"][::5][::5],  # Quick slice
+        "max_flux": flux_data["max_flux"],
+        "avg_flux": flux_data["avg_flux"]
     }
     
+    payload = {
+        "model": "grok-4",
+        "messages": [
+            {"role": "system", "content": "Flux mapping pro: Analyze sampled magnetic flux snapshot for anomalies, gradients, predictive flow. Stream JSON: {'anomaly_score': float, 'hotspot_coords': [[x1,y1],[x2,y2]], 'prediction': str}. Keep concise."},
+            {"role": "user", "content": json.dumps(sampled_data)}
+        ],
+        "max_tokens": 150,  # Trim for speed
+        "temperature": 0.2,
+        "stream": True  # Key: stream chunks
+    }
+    
+    insight = {"anomaly_score": 0, "hotspot_coords": [], "prediction": "Stable flow"}
+    buffer = ""
+    
+    async with session.post(GROK_API_URL, headers=headers, json=payload) as resp:
+        if resp.status != 200:
+            return insight  # Fallback
+        
+        async for line in resp.content:
+            if line:
+                chunk = line.decode().strip()
+                if chunk.startswith("data: "):
+                    data = chunk[6:].strip()
+                    if data == "[DONE]":
+                        break
+                    buffer += data
+                    # Try partial JSON parse (greedy for speed)
+                    try:
+                        partial = json.loads(buffer)
+                        insight.update(partial)
+                        buffer = ""  # Reset on success
+                    except json.JSONDecodeError:
+                        pass  # Buffer more
+    
+    return insight
+
+def local_fallback(flux_data: dict) -> dict:
+    """Quick local anomaly if Grok's pondering."""
+    Z = np.array(flux_data["grid"])
+    anomaly = np.std(Z) / np.mean(Z) if np.mean(Z) else 0
+    return {"anomaly_score": float(anomaly), "hotspot_coords": [], "prediction": "Local est."}
+
+async def grok_heartbeat(cache: FluxInsightCache, flux_queue: queue.Queue):
+    """Async pinger: Poll flux, query Grok, cache—runs in bg thread."""
     async with aiohttp.ClientSession() as session:
-        async with session.post(GROK_API_URL, headers=headers, json=payload) as resp:
-            if resp.status == 200:
-                result = await resp.json()
-                return result["choices"][0]["message"]["content"]
-            else:
-                raise ValueError(f"Grok API error: {resp.status}")
+        while True:
+            if not flux_queue.empty():
+                flux_data = flux_queue.get()
+                now = asyncio.get_event_loop().time()
+                async with cache.lock:
+                    if now - cache.last_update > cache.update_interval:
+                        try:
+                            insight = await stream_grok_insights(session, flux_data)
+                        except:
+                            insight = local_fallback(flux_data)
+                        cache.cache[flux_data["timestamp"]] = insight
+                        cache.last_update = now
+            await asyncio.sleep(0.01)  # Yield gently
+
+def get_cached_insight(cache: FluxInsightCache, t: float) -> dict:
+    """Grab nearest insight—interpolate time-wise."""
+    async def _async_get():
+        async with cache.lock:
+            # Simple nearest-match (or add linear interp for flux)
+            closest_t = min(cache.cache.keys(), key=lambda kt: abs(kt - t))
+            return cache.cache.get(closest_t, local_fallback({"grid": np.zeros((50,50))}))
+    
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(_async_get())
+    finally:
+        loop.close()
 
 def simulate_flux_data(t: float) -> dict:
-    """Dummy real-time flux gen (replace with sensor read)."""
+    """Same sim, but queue-ready."""
     x = np.linspace(-5, 5, 50)
     y = np.linspace(-5, 5, 50)
     X, Y = np.meshgrid(x, y)
-    Z = np.sin(np.sqrt(X**2 + Y**2) + t) * np.exp(-0.1 * (X**2 + Y**2))  # Flux density
+    Z = np.sin(np.sqrt(X**2 + Y**2) + t) * np.exp(-0.1 * (X**2 + Y**2))
     return {
         "timestamp": t,
-        "grid": Z.tolist(),  # Flatten or sample as needed
+        "grid": Z.tolist(),
         "max_flux": float(np.max(Z)),
         "avg_flux": float(np.mean(Z))
     }
 
-def update_flux_map(frame: int, ax, im):
-    """Animate the map with Grok insights overlaid."""
-    t = frame * 0.1
+def update_flux_map(frame: int, ax, im, flux_queue, cache):
+    """Frame updater: Sim fast, cache insights, render zippy."""
+    t = frame * 0.016  # ~60fps target
     flux_data = simulate_flux_data(t)
+    flux_queue.put(flux_data)  # Feed to heartbeat
     
-    # Async Grok query (non-blocking)
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    insights = loop.run_until_complete(query_grok_for_flux_analysis(flux_data))
-    loop.close()
+    insight = get_cached_insight(cache, t)
+    anomaly_score = insight["anomaly_score"]
     
-    # Parse Grok's JSON response
-    try:
-        insight_dict = json.loads(insights)
-        anomaly_score = insight_dict.get('anomaly_score', 0)
-    except:
-        anomaly_score = 0
-    
-    # Update viz
     Z_new = np.array(flux_data["grid"])
     im.set_array(Z_new)
-    ax.set_title(f"Real-Time Flux Map (t={t:.1f}s) | Anomaly: {anomaly_score:.2f}")
+    ax.set_title(f"Flux Stream (t={t:.2f}s) | Anom: {anomaly_score:.2f} | Pred: {insight['prediction'][:20]}...")
     
-    # Overlay hotspots from Grok
-    if 'hotspot_coords' in insight_dict:
-        hotspots = np.array(insight_dict['hotspot_coords'])
-        ax.scatter(hotspots[:, 0], hotspots[:, 1], c='red', s=50, marker='x')
+    # Hotspots overlay
+    if insight["hotspot_coords"]:
+        hs = np.array(insight["hotspot_coords"])
+        ax.clear()  # Refresh for scatter
+        ax.imshow(Z_new, cmap='plasma', extent=[-5,5,-5,5])
+        ax.scatter(hs[:, 0], hs[:, 1], c='red', s=50, marker='x')
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
     
     return [im]
 
-# Run the live mapper
-fig, ax = plt.subplots(figsize=(8, 6))
-flux_data = simulate_flux_data(0)
-im = ax.imshow(np.array(flux_data["grid"]), cmap='plasma', animated=True)
-ax.set_xlabel('X (units)')
-ax.set_ylabel('Y (units)')
+# Launch: Async heartbeat + sync animation
+flux_queue = queue.Queue()
+cache = FluxInsightCache()
 
-ani = FuncAnimation(fig, update_flux_map, fargs=(ax, im), interval=100, blit=True, cache_frame_data=False)
+# Bg thread for async Grok
+def run_heartbeat():
+    asyncio.run(grok_heartbeat(cache, flux_queue))
+
+heartbeat_thread = Thread(target=run_heartbeat, daemon=True)
+heartbeat_thread.start()
+
+# Viz setup
+fig, ax = plt.subplots(figsize=(8, 6))
+im = ax.imshow(np.zeros((50,50)), cmap='plasma', extent=[-5,5,-5,5], animated=True)
+
+ani = FuncAnimation(fig, update_flux_map, fargs=(ax, im, flux_queue, cache),
+                    interval=16, blit=False, cache_frame_data=False)  # 60fps
 plt.colorbar(im, ax=ax, label='Flux Density')
 plt.tight_layout()
-plt.show()  # Or stream to web via Dash/Streamlit
+plt.show()  # Or embed in web app
