@@ -20,7 +20,8 @@ Q = 1.5  # Scaling factor
 BATCH_SIZE = 1000  # Batch size
 FREQ_RANGE = (1.0, 20.0)  # Frequency sweep range
 FREQ_STEP = 0.1  # Frequency step size
-COLLISION_SAMPLES = 1000  # Number of input pairs to test for collisions
+COLLISION_BATCH_SIZE = 1000  # Batch size for collision search
+PREFIX_LENGTH = 8  # Number of hex characters to compare for early termination
 BLOCKCHAIR_API_URL = "https://api.blockchair.com/bitcoin/dashboards/address/"
 
 # Known Mt. Gox addresses
@@ -121,88 +122,63 @@ def detect_scalar_frequencies(tk, freq_range=FREQ_RANGE, step=FREQ_STEP):
             frequencies.append(p)
     return frequencies
 
-# Collision attack prototype function
-def test_collision_attack(data_tk, scalar_freqs, samples=COLLISION_SAMPLES):
+# Optimized collision attack prototype function
+def test_collision_attack(data_tk, scalar_freqs, batch_size=COLLISION_BATCH_SIZE, prefix_length=PREFIX_LENGTH):
     """
-    Test a collision attack by perturbing inputs based on scalar frequencies.
+    Optimized collision search using resonance-guided perturbations and parallel processing.
     """
     collisions_found = 0
     hash_pairs = []
-    
-    for _ in range(samples // 2):  # Generate pairs
-        idx1, idx2 = np.random.randint(0, len(data_tk), 2)
-        base_input1 = data_tk[idx1]
-        base_input2 = data_tk[idx2]
-        
-        # Perturb inputs using the first detected scalar frequency
-        if scalar_freqs:
+    n_samples = min(COLLISION_BATCH_SIZE, len(data_tk) // 2)  # Limit by data size
+
+    if not scalar_freqs:
+        print("No scalar frequencies detected. Using random perturbations.")
+        scalar_freqs = [P]  # Fallback to base period
+
+    # Select high-resonance indices
+    resonance_scores = [krystic_resonance_score(data_tk[i:i+1], data_sigma[i:i+1]) for i in range(len(data_tk))]
+    high_resonance_idx = np.argsort(resonance_scores)[-n_samples:]  # Top N indices
+
+    # Batch processing on GPU
+    if use_gpu:
+        data_tk_batch = cp.asarray(data_tk[high_resonance_idx])
+        n_pairs = len(data_tk_batch) // 2
+        inputs1 = cp.zeros(n_pairs, dtype=float)
+        inputs2 = cp.zeros(n_pairs, dtype=float)
+        hashes1 = cp.zeros(n_pairs, dtype='U64')  # Preallocate for hash strings
+        hashes2 = cp.zeros(n_pairs, dtype='U64')
+
+        for i in range(n_pairs):
+            base1 = data_tk_batch[2*i]
+            base2 = data_tk_batch[2*i + 1]
             perturb_freq = scalar_freqs[0]
-            perturb1 = np.sin(2 * np.pi * base_input1 / perturb_freq) * 0.01  # Small perturbation
-            perturb2 = np.sin(2 * np.pi * base_input2 / perturb_freq) * 0.01
-            input1 = base_input1 + perturb1
-            input2 = base_input2 + perturb2
-        else:
-            input1, input2 = base_input1, base_input2  # No perturbation if no frequencies
-        
-        hash1 = hash_with_sha256(input1)
-        hash2 = hash_with_sha256(input2)
-        hash_pairs.append((input1, input2, hash1, hash2))
-        
-        if hash1 == hash2 and input1 != input2:
-            collisions_found += 1
-            print(f"Collision found! Inputs: {input1}, {input2} | Hash: {hash1}")
-    
-    collision_rate = collisions_found / (samples / 2) * 100
-    print(f"Collision Rate: {collision_rate:.2f}% ({collisions_found} collisions out of {samples // 2} pairs)")
-    return hash_pairs, collisions_found
+            perturb1 = cp.sin(2 * cp.pi * base1 / perturb_freq) * 0.01
+            perturb2 = cp.sin(2 * cp.pi * base2 / perturb_freq) * 0.01
+            inputs1[i] = base1 + perturb1
+            inputs2[i] = base2 + perturb2
+            hashes1[i] = hash_with_sha256(inputs1[i].get())
+            hashes2[i] = hash_with_sha256(inputs2[i].get())
 
-# Main analysis function
-def analyze_sovarielcore(data_tk, data_sigma, batch_size=BATCH_SIZE):
-    r_score = 0.0
-    r_q_score = 0.0
-    n_batches = (len(data_tk) + batch_size - 1) // batch_size
-    for i in range(n_batches):
-        start = i * batch_size
-        end = min((i + 1) * batch_size, len(data_tk))
-        batch_tk = data_tk[start:end]
-        batch_sigma = data_sigma[start:end]
-        r_score += krystic_resonance_score(batch_tk, batch_sigma, q=1.0)
-        r_q_score += krystic_resonance_score(batch_tk, batch_sigma, q=Q)
-    r_score /= n_batches
-    r_q_score /= n_batches
-
-    digit_data = xp.floor(data_tk * 1000).astype(int)
-    autocorr_lag3 = triadic_autocorrelation(digit_data)
-    digit_ent = digit_entropy(digit_data)
-    scalar_freqs = detect_scalar_frequencies(data_tk)
-
-    print(f"Krystic Resonance Score (R): {r_score:.3f}")
-    print(f"Generalized Krystic Score (R_q, q={Q}): {r_q_score:.3f}")
-    print(f"Autocorrelation at Lag 3: {autocorr_lag3:.3f}")
-    print(f"Digit Entropy: {digit_ent:.3f}")
-    print(f"Detected Scalar Frequencies: {scalar_freqs}")
-
-    # Test collision attack
-    hash_pairs, collisions = test_collision_attack(data_tk, scalar_freqs)
-    if collisions > 0:
-        print("Potential SHA-256 weakness detected. Further analysis recommended.")
-
-    lags = np.arange(1, 10)
-    autocorrs = [triadic_autocorrelation(digit_data, lag) for lag in lags]
-    plt.plot(lags, autocorrs, marker='o')
-    plt.xlabel('Lag')
-    plt.ylabel('Autocorrelation')
-    plt.title('Triadic Autocorrelation of Mt. Gox Data')
-    plt.savefig('autocorrelation_mtgo_scalar.png')
-    plt.close()
-
-    return r_score, r_q_score, autocorr_lag3, digit_ent, scalar_freqs, hash_pairs, collisions
-
-# Function to process multiple Mt. Gox addresses
-def analyze_multiple_addresses(addresses=MT_GOX_ADDRESSES):
-    results = {}
-    for address in addresses:
-        print(f"\nAnalyzing Address: {address} ({addresses[address]})")
-        data_tk, data_sigma = prepare_data(address)
-        if data_tk is not None:
-​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​
+        # Parallel prefix comparison and full check
+        prefixes1 = cp.array([h[:prefix_length] for h in hashes1])
+        prefixes2 = cp.array([h[:prefix_length] for h in hashes2])
+        matches = prefixes1 == prefixes2
+        for i in cp.where(matches)[0]:
+            if hashes1[i] == hashes2[i] and inputs1[i] != inputs2[i]:
+                collisions_found += 1
+                hash_pairs.append((inputs1[i].get(), inputs2[i].get(), hashes1[i], hashes2[i]))
+                print(f"Collision found! Inputs: {inputs1[i].get()}, {inputs2[i].get()} | Hash: {hashes1[i]}")
+    else:
+        # CPU fallback (less efficient)
+        for i in range(0, len(high_resonance_idx), 2):
+            if i + 1 >= len(high_resonance_idx):
+                break
+            base1 = data_tk[high_resonance_idx[i]]
+            base2 = data_tk[high_resonance_idx[i + 1]]
+            perturb_freq = scalar_freqs[0]
+            perturb1 = np.sin(2 * np.pi * base1 / perturb_freq) * 0.01
+            perturb2 = np.sin(2 * np.pi * base2 / perturb_freq) * 0.01
+            input1 = base1 + perturb1
+            input2 = base2 + perturb2
+            hash1 = hash_with_sha256(input1)
+            hash2 = hash_with_sha256(input2​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​​
