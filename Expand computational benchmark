@@ -1,0 +1,35 @@
+from mpmath import mp
+import numpy as np
+
+# Set precision
+mp.dps = 15  # Moderate precision for manageable runtime
+
+# Load Odlyzko's data (first 100 zeros) - assumes zetazeros.dat is in the working directory
+with open('zetazeros.dat', 'r') as f:
+    lines = f.readlines()
+t_k = np.array([float(line.split()[1]) for line in lines[:100]])  # Imaginary parts
+
+# Define krystic resonance score function
+def krystic_resonance_score(t_values, period=369, sigma=0.5, lambda_penalty=10):
+    phases = np.array(t_values) / period * 2 * np.pi
+    alignments = np.abs(np.cos(phases))
+    penalty = np.exp(-abs(sigma - 0.5) * lambda_penalty)
+    return np.mean(alignments) * penalty
+
+# Compute score for the first 100 zeros
+score_on = krystic_resonance_score(t_k)
+print(f"On-Line Score for First 100 Zeros: {score_on:.3f}")
+
+# Compute mean nearest-neighbor spacing
+spacings = np.diff(t_k)
+mean_spacing = np.mean(spacings)
+print(f"Mean Nearest-Neighbor Spacing: {mean_spacing:.3f}")
+
+# Next steps (to be uncommented and adjusted as needed)
+# for _ in range(3):  # Run 3 times for stability check
+#     score_on = krystic_resonance_score(t_k)
+#     print(f"Run Score: {score_on:.3f}")
+# if len(lines) > 200:  # Extend to 200 if data permits
+#     t_k_200 = np.array([float(line.split()[1]) for line in lines[:200]])
+#     score_on_200 = krystic_resonance_score(t_k_200)
+#     print(f"On-Line Score for First 200 Zeros: {score_on_200:.3f}")
