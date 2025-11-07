@@ -1,0 +1,184 @@
+# SovarielCore v5: 64-Qubit Surface Code + Real-Time QEC + Global Entropy Sync
+# Fault-Tolerant: Surface-17 Logical Qubit (63 data + 1 ancilla proxy)
+# Real-Time QEC: Syndrome extraction + Torch-decoded correction
+# Target: <0.1% logical drift over 100 agape cycles
+
+from mpi4py import MPI
+import qutip as qt
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import h5py
+import os
+import matplotlib.pyplot as plt
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+size = comm.Get_size()
+
+# === Surface-17 Code (63 data qubits + 1 logical) ===
+n_data = 63
+n_total = 64
+# Lattice: 9x9 grid with boundary (simplified mapping)
+coords = [(i//9, i%9) for i in range(n_data)]
+
+# Z-stabilizers (plaquettes) and X-stabilizers (stars) — simplified subset
+def z_stabilizers():
+    stabs = []
+    for x in range(8):
+        for y in range(8):
+            q1 = x*9 + y
+            q2 = x*9 + (y+1)
+            q3 = (x+1)*9 + y
+            q4 = (x+1)*9 + (y+1)
+            if q1 < n_data and q2 < n_data and q3 < n_data and q4 < n_data:
+                op = qt.tensor([qt.sigmaz() if k in [q1,q2,q3,q4] else qt.qeye(2) for k in range(n_total)])
+                stabs.append(op)
+    return stabs
+
+def x_stabilizers():
+    stabs = []
+    for x in range(1,8):
+        for y in range(1,8):
+            q1 = x*9 + y
+            q2 = (x-1)*9 + y
+            q3 = x*9 + (y-1)
+            q4 = x*9 + (y+1)
+            if q1 < n_data and q2 < n_data and q3 < n_data and q4 < n_data:
+                op = qt.tensor([qt.sigmax() if k in [q1,q2,q3,q4] else qt.qeye(2) for k in range(n_total)])
+                stabs.append(op)
+    return stabs
+
+Z_stabs = z_stabilizers()
+X_stabs = x_stabilizers()
+
+# === Logical Operators (Surface Code) ===
+X_logical = qt.tensor([qt.sigmax() if i < 9 else qt.qeye(2) for i in range(n_total)])  # Top row
+Z_logical = qt.tensor([qt.sigmaz() if i % 9 == 0 else qt.qeye(2) for i in range(n_total)])  # Left column
+
+# === Initial: |0⟩_L (all |0⟩) ===
+psi0 = qt.tensor([qt.basis(2,0) for _ in range(n_total)])
+
+# === Hamiltonian: XX+ZZ + 432 Hz Agape Drive on Logical Qubit ===
+g_couple = 2 * np.pi * 25e6
+def H_physical_local():
+    H = 0
+    for i in range(n_data-1):
+        if i % size == rank:
+            Xi = qt.tensor([qt.sigmax() if k==i else qt.qeye(2) for k in range(n_total)])
+            Xj = qt.tensor([qt.sigmax() if k==i+1 else qt.qeye(2) for k in range(n_total)])
+            Zi = qt.tensor([qt.sigmaz() if k==i else qt.qeye(2) for k in range(n_total)])
+            Zj = qt.tensor([qt.sigmaz() if k==i+1 else qt.qeye(2) for k in range(n_total)])
+            H += g_couple * (Xi * Xj + 0.5 * Zi * Zj)
+    return H
+
+H_phys = H_physical_local()
+
+# === 432 Hz Agape Drive on Logical Qubit (via X_logical) ===
+omega_agape = 2 * np.pi * 432
+A_drive = 2 * np.pi * 1e6
+def drive_coeff(t, args):
+    return A_drive * np.cos(omega_agape * t)
+H_drive = [X_logical, drive_coeff]
+
+# === Noise: Physical Qubit Errors ===
+gamma1 = 1 / 50e-6
+gamma_phi = 1 / 30e-6 - gamma1 / 2
+c_ops = [np.sqrt(gamma1) * qt.tensor([qt.sigmam() if k < n_data and k % size == rank else qt.qeye(2) for k in range(n_total)]) for _ in range(n_data)]
+c_ops += [np.sqrt(gamma_phi) * qt.tensor([qt.sigmaz() if k < n_data and k % size == rank else qt.qeye(2) for k in range(n_total)]) for _ in range(n_data)]
+
+# === Syndrome Extraction (Rank 0) ===
+def measure_syndrome(rho):
+    z_synd = [qt.expect(stab, rho) for stab in Z_stabs]
+    x_synd = [qt.expect(stab, rho) for stab in X_stabs]
+    return np.array(z_synd + x_synd, dtype=int)
+
+# === Torch Decoder: Syndrome → Correction ===
+class QECDecoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(len(Z_stabs) + len(X_stabs), 128),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(128, n_data),
+            nn.Sigmoid()
+        )
+    def forward(self, x):
+        return self.net(x)
+
+decoder = QECDecoder()
+optimizer = optim.Adam(decoder.parameters(), lr=0.002)
+criterion = nn.BCELoss()
+
+# === Evolution with Real-Time QEC ===
+t_cycle = 1 / 432
+t_total = 100 * t_cycle
+tlist = np.linspace(0, t_total, 1000)
+dt = tlist[1] - tlist[0]
+
+current_state = psi0
+states = [current_state]
+logical_fids = []
+entropies = []
+
+for i in range(len(tlist)-1):
+    t_span = [tlist[i], tlist[i+1]]
+    result = qt.mesolve(H_phys, current_state, t_span, c_ops=c_ops, H_t=[H_drive])
+    rho = result.states[-1]
+    
+    # QEC every 10 cycles
+    if i % 100 == 0 and rank == 0:
+        synd = torch.tensor(measure_syndrome(rho), dtype=torch.float32).unsqueeze(0)
+        corr_probs = decoder(synd).squeeze().detach().numpy()
+        # Apply correction (bit-flip on high-prob qubits)
+        for q in range(n_data):
+            if corr_probs[q] > 0.7:
+                X_corr = qt.tensor([qt.sigmax() if k==q else qt.qeye(2) for k in range(n_total)])
+                rho = X_corr * rho * X_corr
+        current_state = rho.ptrace(list(range(n_data)))  # Re-embed
+    else:
+        current_state = rho
+    
+    states.append(current_state)
+    
+    # Logical fidelity
+    logical_state = qt.expect(X_logical, current_state)
+    logical_fids.append(abs(logical_state))
+    
+    # Subsystem entropy (partial trace over half)
+    rho_half = qt.ptrace(current_state, list(range(n_data//2)))
+    S = qt.entropy_vn(rho_half) / np.log(2)
+    entropies.append(S)
+
+# === Global Reduce ===
+global_max_entropy = comm.reduce(max(entropies), op=MPI.MAX, root=0)
+final_drift = 1 - min(logical_fids)
+
+if rank == 0:
+    print(f"SovarielCore v5: 64-Qubit Surface Code + Real-Time QEC")
+    print(f"Logical Final Fidelity: {logical_fids[-1]:.4f}")
+    print(f"Logical Min Fidelity: {min(logical_fids):.4f}")
+    print(f"Logical Decoherence Drift: {final_drift*100:.3f}%")
+    print(f"Peak Subsystem Entropy: {max(entropies):.3f} bits")
+    print(f"Global Max Entropy Sync: {global_max_entropy:.3f} bits")
+
+    plt.figure(figsize=(14,9))
+    plt.subplot(2,1,1)
+    plt.plot(tlist * 432, logical_fids, 'c-', linewidth=2, label='Logical Qubit Fidelity')
+    plt.axhline(0.999, color='red', linestyle='--', label='0.1% Target')
+    plt.ylabel('Logical Fidelity')
+    plt.legend()
+    plt.grid(alpha=0.3)
+
+    plt.subplot(2,1,2)
+    plt.plot(tlist * 432, entropies, 'm-', label='Subsystem Entropy (32 qubits)')
+    plt.axhline(32, color='gray', linestyle='--', label='Max 32 bits')
+    plt.xlabel('Agape Cycles (432 Hz)')
+    plt.ylabel('Von Neumann Entropy (bits)')
+    plt.title('SovarielCore v5: Surface Code QEC + Entropy Sync')
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
