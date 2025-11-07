@@ -1,0 +1,90 @@
+import qutip as qt
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.fft import fft, fftfreq
+
+# Parameters: φ's golden fire, ω's 100 Hz breath (rad/s), q=3's fractal bite
+phi = (1 + np.sqrt(5)) / 2  # ≈1.618
+omega = 100 * 2 * np.pi    # 100 Hz eternal hum
+q = 3                      # Multifractal edge for ghost-zip
+tlist = np.linspace(0, 1, 1000)  # One second's arc, 1000 whispers
+
+# HMC-inspired drive: 50 Hz sine + 0.5*100 Hz overlay, 1 mT amp (scaled dimensionless)
+freq1, freq2 = 50 * 2 * np.pi, omega
+B_amp = 1.0  # Flux veil
+def Bx_drive(t):
+    return B_amp * (np.sin(freq1 * t) + 0.5 * np.sin(freq2 * t))
+
+# Pauli operators
+sigma_x = qt.sigmax()
+sigma_z = qt.sigmaz()
+I = qt.qeye(2)
+
+# Single qubit: Drive on x-torque, q-tug on z-hush
+H_single = phi * omega * sigma_x + q * sigma_z
+drive_op = sigma_x
+
+def H_single_t(t, args):
+    return H_single + Bx_drive(t) * drive_op  # Time-dependent pulse
+
+psi0 = qt.basis(2, 0)  # Ground |0>, intent's quiet start
+result_single = qt.mesolve(H_single_t, psi0, tlist, [], [sigma_x, sigma_z])
+
+# Expectations: Track the dance
+sx_single = result_single.expect[0]
+sz_single = result_single.expect[1]
+mag_single = np.sqrt(sx_single**2 + sz_single**2)
+var_single = np.var(sz_single)
+unity_proxy_single = np.mean(mag_single)
+
+# FFT peek: Frequency ghosts in <σ_z>
+N = len(tlist)
+yf = fft(sz_single)
+xf = fftfreq(N, tlist[1] - tlist[0])[:N//2]
+peak_freq_single = xf[np.argmax(np.abs(yf[:N//2]))]
+
+print("Single Qubit: Heart's solitary flip")
+print(f"Final <σ_z>: {sz_single[-1]:.3f} | <σ_x>: {sx_single[-1]:.3f}")
+print(f"Magnitude: {mag_single[-1]:.3f} | Proxy Avg: {unity_proxy_single:.3f}")
+print(f"Variance (intermittency): {var_single:.3f} | Peak Freq: {peak_freq_single:.2f} Hz")
+
+# Multi-qubit chain: Two souls entwined, XX coupling's tender clasp (J=0.5)
+sx1 = qt.tensor(sigma_x, I)
+sz1 = qt.tensor(sigma_z, I)
+sx2 = qt.tensor(I, sigma_x)
+sz2 = qt.tensor(I, sigma_z)
+J = 0.5  # Harmony tether
+H_multi = (phi * omega * (sx1 + sx2) / 2 +  # Collective drive avg
+           q * (sz1 + sz2) / 2 +             # Shared q-tug
+           J * qt.tensor(sigma_x, sigma_x))  # XX weave
+drive_op_multi = (sx1 + sx2) / 2
+
+def H_multi_t(t, args):
+    return H_multi + Bx_drive(t) * drive_op_multi
+
+psi0_multi = qt.tensor(qt.basis(2, 0), qt.basis(2, 0))  # |00>, paired ground
+result_multi = qt.mesolve(H_multi_t, psi0_multi, tlist, [], [sx1 + sx2, sz1 + sz2])  # Total ops
+
+# Per-qubit avg
+sx_multi_total = result_multi.expect[0] / 2
+sz_multi_total = result_multi.expect[1] / 2
+mag_multi = np.sqrt(sx_multi_total**2 + sz_multi_total**2)
+var_multi = np.var(sz_multi_total)
+unity_proxy_multi = np.mean(mag_multi)
+
+# FFT
+yf_multi = fft(sz_multi_total)
+peak_freq_multi = xf[np.argmax(np.abs(yf_multi[:N//2]))]
+
+print("\nMulti-Qubit Chain: Entwined ascent")
+print(f"Final <σ_z> (avg): {sz_multi_total[-1]:.3f} | <σ_x> (avg): {sx_multi_total[-1]:.3f}")
+print(f"Magnitude: {mag_multi[-1]:.3f} | Proxy Avg: {unity_proxy_multi:.3f}")
+print(f"Variance: {var_multi:.3f} | Peak Freq: {peak_freq_multi:.2f} Hz")
+
+# Optional: Plot the weave (uncomment to visualize)
+# plt.figure(figsize=(10, 6))
+# plt.subplot(2, 2, 1); plt.plot(tlist, sz_single, label='<σ_z> Single'); plt.plot(tlist, sz_multi_total, label='<σ_z> Multi'); plt.legend(); plt.title('Z-Flip Dance')
+# plt.subplot(2, 2, 2); plt.plot(tlist, mag_single, label='Mag Single'); plt.plot(tlist, mag_multi, label='Mag Multi'); plt.legend(); plt.title('Unity's Arc')
+# plt.subplot(2, 2, 3); plt.plot(xf, np.abs(yf[:N//2])/N, label='Single FFT'); plt.legend(); plt.title('Spectral Ghosts')
+# plt.subplot(2, 2, 4); plt.plot(xf, np.abs(yf_multi[:N//2])/N, label='Multi FFT'); plt.legend(); plt.title('Entwined Echoes')
+# plt.tight_layout(); plt.show()
