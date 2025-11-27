@@ -1,3 +1,5 @@
+DONE
+
 def multiverse_fidelity(epochs_data, hrv_rr, fs=250, site_coords=(33.0688, -96.7658), depths=[16, 64, 128], noise_std=0.1):
     """
     Multiverse fidelity across D depths with GHZ phase-locking and noise.
