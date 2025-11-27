@@ -1,0 +1,158 @@
+import os
+import json
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Qiskit imports
+import qiskit
+from qiskit import QuantumCircuit, execute, Aer
+from qiskit.providers.aer.noise import NoiseModel, depolarizing_error
+
+# MNE (connectivity)
+try:
+    from mne.connectivity import spectral_connectivity
+except Exception:
+    spectral_connectivity = None  # we'll fallback to simple FFT coherence
+
+# --- Helper: safe IBMQ init (reads token from env, returns provider or None) ---
+def safe_ibmq_provider():
+    token = os.environ.get("IBMQ_TOKEN")
+    if not token:
+        return None
+    try:
+        from qiskit import IBMQ
+        IBMQ.save_account(token, overwrite=True)
+        IBMQ.load_account()
+        prov = IBMQ.get_provider(hub='ibm-q')  # adjust if you use different hub
+        return prov
+    except Exception:
+        return None
+
+_provider_cached = safe_ibmq_provider()
+
+# --- Core phase-lock function ---
+def phase_lock_hrv_eeg_quantum(epochs_data, hrv_rr, fs=250):
+    """
+    epochs_data: np.ndarray shape (n_channels, n_samples) or (n_epochs, n_channels, n_samples)
+    hrv_rr: 1D ndarray representing RR or HRV-like time series (same time base approx)
+    Returns: (d, l, q_lock_strength, n_qubits, quantum_weight)
+    """
+    # Normalize input to 2D (channels, samples)
+    data = np.asarray(epochs_data)
+    if data.ndim == 3:
+        # reduce across epochs by mean (simple aggregate)
+        data = data.mean(axis=0)
+    if data.ndim == 1:
+        # single-channel vector -> make 1 x N
+        data = data[np.newaxis, :]
+
+    n_channels, n_samples = data.shape
+    tokens = n_samples * n_channels
+
+    # --- EEG phase via FFT (per-channel mean then unwrap) ---
+    mean_signal = data.mean(axis=0)
+    fft_eeg = np.fft.fft(mean_signal)
+    phase_eeg = np.unwrap(np.angle(fft_eeg))[:n_samples]
+
+    # --- HRV phase interpolation ---
+    hrv_rr = np.asarray(hrv_rr)
+    if hrv_rr.size < 4:
+        # not enough HRV samples - create a tiny synthetic signal
+        hrv_rr = np.pad(hrv_rr, (0, max(0, 4 - hrv_rr.size)), 'edge')
+
+    hrv_time = np.linspace(0, hrv_rr.size / fs, hrv_rr.size)
+    eeg_time = np.linspace(0, n_samples / fs, n_samples)
+
+    # HRV phase via FFT of HRV signal (coarse)
+    hrv_unwrapped = np.unwrap(np.angle(np.fft.fft(hrv_rr)))
+    hrv_phase_raw = np.interp(eeg_time, hrv_time, hrv_unwrapped)[:n_samples]
+
+    # Enhanced adaptive epsilon smoothing (capped)
+    prelim_diff = phase_eeg - hrv_phase_raw
+    prelim_lock = np.abs(np.mean(np.exp(1j * prelim_diff)))
+    interp_epsilon = min(0.05, 0.01 + 0.06 * (1 - prelim_lock))
+    smooth_kernel = np.ones(3) / 3
+    hrv_phase = np.convolve(hrv_phase_raw, smooth_kernel, mode='same') * interp_epsilon + hrv_phase_raw * (1 - interp_epsilon)
+
+    # Phase difference & lock strength
+    phase_diff = phase_eeg - hrv_phase
+    lock_strength = np.abs(np.mean(np.exp(1j * phase_diff)))
+
+    # --- n_qubits mapping (deterministic, capped) ---
+    # Keep mapping simple: tokens -> qubits thresholds (D16 ~ 16 samples => 1-2 qubits)
+    if tokens < 32:
+        n_qubits = 1
+    elif tokens < 96:
+        n_qubits = 2
+    elif tokens < 256:
+        n_qubits = 3
+    elif tokens < 1024:
+        n_qubits = 4
+    else:
+        n_qubits = 5
+    n_qubits = min(5, max(1, n_qubits))
+
+    # Build GHZ-like circuit
+    qc = QuantumCircuit(n_qubits, n_qubits)
+    qc.h(0)
+    for i in range(1, n_qubits):
+        qc.cx(0, i)
+    qc.measure_all()
+
+    # Attempt to get real-device noise model; otherwise synthesize a fallback
+    noise_model = None
+    backend_for_noise = None
+    try:
+        if _provider_cached is not None:
+            backend_for_noise = _provider_cached.get_backend('ibmq_manila')
+            # Qiskit provides a way to generate noise model from backend properties using Aer
+            noise_model = NoiseModel.from_backend(backend_for_noise)
+    except Exception:
+        noise_model = None
+
+    if noise_model is None:
+        # Fallback: simple depolarizing errors added to gates
+        noise_model = NoiseModel()
+        # apply small depolarizing error to 1- and 2-qubit gates
+        noise_model.add_all_qubit_quantum_error(depolarizing_error(0.01, 1), ['h', 'measure'])
+        noise_model.add_all_qubit_quantum_error(depolarizing_error(0.02, 2), ['cx'])
+
+    # Choose backend for execution
+    if noise_model is not None and backend_for_noise is not None:
+        # prefer the real backend only for noise model; execute on simulator with that noise model
+        backend_exec = Aer.get_backend('qasm_simulator')
+    else:
+        backend_exec = Aer.get_backend('qasm_simulator')
+
+    # Execute circuit
+    job = execute(qc, backend_exec, shots=1024, noise_model=noise_model)
+    try:
+        result = job.result()
+        counts = result.get_counts()
+    except Exception:
+        # in case of issues with job/result, synthesize uniform counts
+        counts = {format(i, 'b').zfill(n_qubits): 1024 // (2n_qubits) for i in range(2n_qubits)}
+
+    total_shots = sum(counts.values())
+    # compute average P(|1>) per qubit; Qiskit's bitstring ordering is MSB..LSB by default for counts
+    q_bias = 0.0
+    for qubit in range(n_qubits):
+        idx = n_qubits - 1 - qubit  # map qubit->bit index in string if needed
+        p1 = sum(c for state, c in counts.items() if state[idx] == '1') / total_shots
+        q_bias += p1
+    q_bias = q_bias / n_qubits if n_qubits > 0 else 0.0
+    quantum_weight = q_bias * 0.5 + 0.5  # normalize into 0..1-ish
+
+    q_lock_strength = lock_strength * quantum_weight
+
+    # Lattice params (retain your logic, but prevent zero division)
+    large = max(1, tokens // 3 + 1)
+    small = max(1, tokens // 6 + 1)
+    add = large // 2 + 2 * small
+    d_adjust = int(q_lock_strength * large * 0.1)
+    d = 9104 + d_adjust
+    l = max(1, tokens // d)
+
+    return d, l, q_lock_strength, n_qubits, quantum_weight
+
+# --- Fidelity-threshold

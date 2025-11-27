@@ -1,0 +1,25 @@
+import numpy as np
+
+np.random.seed(42)
+N, K, T, dt = 100, 6.0, 100.0, 0.01
+steps = int(T / dt)
+Delta = 1.0
+omegas = np.random.standard_cauchy(N) * Delta
+theta = np.random.uniform(0, 2*np.pi, N)
+
+# Quantum Q from shots
+n_q = 10
+shots = np.random.binomial(1, 0.5, n_q)
+Q = np.mean(shots)
+K_q = K * Q
+
+R_history = np.zeros(steps)
+for t in range(steps):
+    sin_terms = np.sin(theta[np.newaxis, :] - theta[:, np.newaxis])
+    dtheta = omegas + (K_q / N) * np.sum(sin_terms, axis=1)
+    theta += dtheta * dt
+    theta = np.mod(theta, 2 * np.pi)
+    R = np.abs(np.mean(np.exp(1j * theta)))
+    R_history[t] = R
+
+print(f"Final R: {R_history[-1]:.4f} | Max R: {np.max(R_history):.4f}")
